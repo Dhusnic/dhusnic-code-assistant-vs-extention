@@ -17,7 +17,20 @@ export interface McpInput { name: string; commandLine: string; env: Record<strin
 export interface LinuxInput { name: string; host: string; port: number; user: string; auth: 'password' | 'key'; password?: string; key?: string; passphrase?: string; env: Record<string, string>; notes?: string; alwaysAsk?: boolean }
 
 const STATE_KEY = 'linuxServers';
-const NAME_RE = /^[A-Za-z0-9][\w.-]{0,63}$/;
+/** MCP names become part of tool names, so they stay strict. Linux server names are labels and may contain spaces. */
+const MCP_NAME_RE = /^[A-Za-z0-9][\w.-]{0,63}$/;
+const LINUX_NAME_RE = /^[A-Za-z0-9](?:[\w .-]{0,62}[\w.-])?$/;
+
+/** A validation problem tied to one field of the server dialog, so the dialog can highlight it. */
+export class FieldError extends Error {
+  constructor(readonly field: string, message: string) { super(message); }
+}
+
+export function validateServerName(kind: ServerKind, name: string): string | undefined {
+  if (!name) { return 'Enter a name for the server.'; }
+  if (kind === 'mcp') { return MCP_NAME_RE.test(name) ? undefined : 'MCP server names can use letters, digits, dots, dashes and underscores, with no spaces (up to 64 characters).'; }
+  return LINUX_NAME_RE.test(name) ? undefined : 'Server names can use letters, digits, spaces, dots, dashes and underscores (up to 64 characters), and must start and end with a letter or digit.';
+}
 const HOST_RE = /^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252}))$/;
 const USER_RE = /^[A-Za-z0-9_][\w.-]{0,63}$/;
 const ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -46,26 +59,34 @@ function checkEnv(env: Record<string, string>): string | undefined {
   return bad === undefined ? undefined : `"${bad}" is not a valid environment variable name.`;
 }
 
-export function validateMcp(input: McpInput): string | undefined {
-  if (!NAME_RE.test(input.name)) { return 'Use a name of letters, digits, dots, dashes or underscores (up to 64).'; }
+export function checkMcp(input: McpInput): FieldError | undefined {
+  const name = validateServerName('mcp', input.name);
+  if (name) { return new FieldError('name', name); }
   let words: string[];
-  try { words = splitCommandLine(input.commandLine); } catch (e: any) { return e.message; }
-  if (!words.length || !words[0]) { return 'Enter the command that starts the MCP server.'; }
-  return checkEnv(input.env);
+  try { words = splitCommandLine(input.commandLine); } catch (e: any) { return new FieldError('command', e.message); }
+  if (!words.length || !words[0]) { return new FieldError('command', 'Enter the command that starts the MCP server.'); }
+  const env = checkEnv(input.env);
+  return env ? new FieldError('env', env) : undefined;
 }
 
-export function validateLinux(input: LinuxInput, isNew: boolean): string | undefined {
-  if (!NAME_RE.test(input.name)) { return 'Use a name of letters, digits, dots, dashes or underscores (up to 64).'; }
-  if (!HOST_RE.test(input.host)) { return 'Enter a valid IP address or host name.'; }
-  if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) { return 'The port must be a number from 1 to 65535.'; }
-  if (!USER_RE.test(input.user)) { return 'Enter a valid user name.'; }
-  if (input.auth !== 'password' && input.auth !== 'key') { return 'Choose password or SSH key authentication.'; }
-  if (isNew && input.auth === 'password' && !input.password) { return 'Enter the password.'; }
-  if (isNew && input.auth === 'key' && !input.key?.trim()) { return 'Paste the private key.'; }
-  if (input.key?.trim() && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(input.key)) { return 'That does not look like a private key (it should start with -----BEGIN … PRIVATE KEY-----).'; }
-  if ((input.notes ?? '').length > 4000) { return 'Keep the notes under 4000 characters.'; }
-  return checkEnv(input.env);
+export const validateMcp = (input: McpInput): string | undefined => checkMcp(input)?.message;
+
+export function checkLinux(input: LinuxInput, isNew: boolean): FieldError | undefined {
+  const name = validateServerName('linux', input.name);
+  if (name) { return new FieldError('name', name); }
+  if (!HOST_RE.test(input.host)) { return new FieldError('host', 'Enter a valid IP address or host name.'); }
+  if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) { return new FieldError('port', 'The port must be a number from 1 to 65535.'); }
+  if (!USER_RE.test(input.user)) { return new FieldError('user', 'Enter a valid user name.'); }
+  if (input.auth !== 'password' && input.auth !== 'key') { return new FieldError('auth', 'Choose password or SSH key authentication.'); }
+  if (isNew && input.auth === 'password' && !input.password) { return new FieldError('password', 'Enter the password.'); }
+  if (isNew && input.auth === 'key' && !input.key?.trim()) { return new FieldError('key', 'Paste the private key.'); }
+  if (input.key?.trim() && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(input.key)) { return new FieldError('key', 'That does not look like a private key (it should start with -----BEGIN … PRIVATE KEY-----).'); }
+  if ((input.notes ?? '').length > 4000) { return new FieldError('notes', 'Keep the notes under 4000 characters.'); }
+  const env = checkEnv(input.env);
+  return env ? new FieldError('env', env) : undefined;
 }
+
+export const validateLinux = (input: LinuxInput, isNew: boolean): string | undefined => checkLinux(input, isNew)?.message;
 
 export class ServerRegistry {
   constructor(
@@ -104,11 +125,11 @@ export class ServerRegistry {
   async credentials(name: string): Promise<LinuxSecret> { return this.secret(name); }
 
   async saveMcp(original: string | undefined, input: McpInput): Promise<void> {
-    const err = validateMcp(input);
-    if (err) { throw new Error(err); }
+    const err = checkMcp(input);
+    if (err) { throw err; }
     const servers = this.userMcp();
     if (original && !servers[original]) { throw new Error(`"${original}" is defined in the workspace settings and cannot be edited here.`); }
-    if (input.name !== original && this.cfg.get<Record<string, any>>('mcpServers', {})[input.name]) { throw new Error(`A server named "${input.name}" already exists.`); }
+    if (input.name !== original && this.cfg.get<Record<string, any>>('mcpServers', {})[input.name]) { throw new FieldError('name', `A server named "${input.name}" already exists.`); }
     const [command, ...args] = splitCommandLine(input.commandLine);
     const previous = original ? servers[original] : undefined;
     if (original) { delete servers[original]; }
@@ -118,11 +139,11 @@ export class ServerRegistry {
   }
 
   async saveLinux(original: string | undefined, input: LinuxInput): Promise<void> {
-    const err = validateLinux(input, !original);
-    if (err) { throw new Error(err); }
+    const err = checkLinux(input, !original);
+    if (err) { throw err; }
     const list = this.linux();
     if (original && !list.some((s) => s.name === original)) { throw new Error(`The server "${original}" no longer exists.`); }
-    if (input.name !== original && list.some((s) => s.name === input.name)) { throw new Error(`A server named "${input.name}" already exists.`); }
+    if (input.name !== original && list.some((s) => s.name === input.name)) { throw new FieldError('name', `A server named "${input.name}" already exists.`); }
     const old = original ? await this.secret(original) : {};
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(input.env)) { env[k] = v || old.env?.[k] || ''; }
@@ -132,8 +153,8 @@ export class ServerRegistry {
       passphrase: input.auth === 'key' ? (input.passphrase || (input.key?.trim() ? undefined : old.passphrase)) : undefined,
       env,
     };
-    if (input.auth === 'password' && !secret.password) { throw new Error('Enter the password.'); }
-    if (input.auth === 'key' && !secret.key) { throw new Error('Paste the private key.'); }
+    if (input.auth === 'password' && !secret.password) { throw new FieldError('password', 'Enter the password.'); }
+    if (input.auth === 'key' && !secret.key) { throw new FieldError('key', 'Paste the private key.'); }
     // Write the new secret before removing the old one, so a failure never loses the credential.
     await this.ctx.secrets.store(secretKey(input.name), JSON.stringify(secret));
     if (original && original !== input.name) { await this.ctx.secrets.delete(secretKey(original)); }
@@ -158,7 +179,8 @@ export class ServerRegistry {
   }
 
   async clone(kind: ServerKind, name: string, newName: string): Promise<void> {
-    if (!NAME_RE.test(newName)) { throw new Error('Use a name of letters, digits, dots, dashes or underscores (up to 64).'); }
+    const bad = validateServerName(kind, newName);
+    if (bad) { throw new Error(bad); }
     if (kind === 'mcp') {
       const all = this.cfg.get<Record<string, any>>('mcpServers', {});
       if (!all[name]) { throw new Error(`The server "${name}" no longer exists.`); }

@@ -600,3 +600,6 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
 .mcard .actions #serverTestBtn[hidden] { display: none; }
 .mcard .actions { flex-wrap: wrap; }
 .mcard .actions .btn[disabled] { opacity: .5; cursor: default; }
+
+/* server dialog: the field a validation error belongs to */
+.sv-form .invalid, .sv-form .invalid:focus { outline: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); outline-offset: -1px; }

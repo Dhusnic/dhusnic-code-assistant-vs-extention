@@ -199,7 +199,7 @@
     $('serverKey').placeholder = linux ? 'Leave empty to keep the saved key' : '-----BEGIN OPENSSH PRIVATE KEY-----';
     // Linux environment values are secret: only their names come back, and an empty value keeps the saved one.
     $('envList').innerHTML = mcp ? Object.entries(mcp.env || {}).map(([key, v]) => envRow(key, v, false)).join('') : linux ? (linux.envKeys || []).map((key) => envRow(key, '', true)).join('') : '';
-    $('serverErr').textContent = ''; $('dialogSave').disabled = false;
+    $('serverErr').textContent = ''; $('dialogSave').disabled = false; markField();
     showKind();
     $('serverDialog').hidden = false;
     $('serverName').focus();
@@ -244,10 +244,23 @@
     if (!testing) { return; }   // the dialog was closed or reopened while the test ran
     testing = false; $('serverTestBtn').disabled = false;
     setTestLine(m.ok ? (m.text || 'Connected.') : (m.text || 'Could not connect.'), m.ok ? 'ok' : 'fail');
+    markField(m.ok ? undefined : m.field);
   }
+  /** Highlights the field a validation error belongs to, and moves the cursor there. */
+  const FIELD_IDS = { name: 'serverName', host: 'serverHost', port: 'serverPort', user: 'serverUser', auth: 'serverAuth', password: 'serverPassword', key: 'serverKey', notes: 'serverNotes', command: 'serverCommand', env: 'envList' };
+  function markField(field) {
+    document.querySelectorAll('#serverDialog .invalid').forEach((el) => { el.classList.remove('invalid'); el.removeAttribute('aria-invalid'); });
+    const el = field && $(FIELD_IDS[field]);
+    if (!el) { return; }
+    el.classList.add('invalid'); el.setAttribute('aria-invalid', 'true');
+    el.scrollIntoView({ block: 'nearest' });
+    if (el.focus) { el.focus(); }
+  }
+  $('serverDialog').addEventListener('input', (e) => { if (e.target.classList && e.target.classList.contains('invalid')) { e.target.classList.remove('invalid'); e.target.removeAttribute('aria-invalid'); } });
   function onServerResult(m) {
-    if (m.ok) { closeServerDialog(); return; }
+    if (m.ok) { markField(); closeServerDialog(); return; }
     $('serverErr').textContent = m.error || 'Could not save the server.'; $('dialogSave').disabled = false;
+    markField(m.field);
   }
 
   window.addEventListener('message', ({ data: m }) => {

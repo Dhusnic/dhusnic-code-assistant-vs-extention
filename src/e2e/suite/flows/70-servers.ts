@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { waitFor } from '../harness';
 import { Flow } from '../types';
 
-const NAME = 'prod-e2e';
+const NAME = 'Prod e2e server';
 
 export const flows: Flow[] = [
   {
@@ -60,13 +60,23 @@ export const flows: Flow[] = [
       await sb.input('#serverCommand', 'npx "unclosed');
       await sb.click('#dialogSave');
       await sb.waitFor('#serverErr', { text: 'unclosed quote' });
+      await sb.waitFor('#serverCommand.invalid');
       await sb.waitFor('#serverDialog', { visible: true });
+      // MCP names become tool names, so spaces are refused there and the name field is highlighted.
+      await sb.input('#serverName', 'my docs');
+      await sb.input('#serverCommand', 'npx docs-mcp');
+      await sb.click('#dialogSave');
+      await sb.waitFor('#serverErr', { text: 'no spaces' });
+      await sb.waitFor('#serverName.invalid');
       await sb.input('#serverKind', 'linux');
+      await sb.input('#serverName', 'Personal server');
       await sb.input('#serverHost', '-oProxyCommand=x');
       await sb.input('#serverUser', 'deploy');
       await sb.input('#serverPassword', 'p');
       await sb.click('#dialogSave');
       await sb.waitFor('#serverErr', { text: 'valid IP address or host name' });
+      await sb.waitFor('#serverHost.invalid');
+      await sb.waitFor('#serverName.invalid', { count: 0 });
       await sb.click('#dialogCancel');
       await sb.waitFor('#serverDialog', { visible: false });
       assert.deepEqual(t.hub.servers.mcpList(), []);

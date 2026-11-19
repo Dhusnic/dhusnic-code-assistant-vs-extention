@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import { randomBytes } from 'crypto';
 import { buildSidebarHtml } from '../core/html';
 import type { Hub, SidebarSink } from './hub';
-import { LinuxInput, validateLinux } from './features/servers';
+import { FieldError, LinuxInput, checkLinux, validateServerName } from './features/servers';
 import type { SshTarget } from '../core/ssh';
 
 /** Activity-bar view: LLM status and usage, and the session manager (all sessions, live agent activity). */
@@ -85,7 +85,7 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
       }
       this.post({ type: 'serverResult', ok: true });
       this.refresh();
-    } catch (e: any) { this.post({ type: 'serverResult', ok: false, error: e.message ?? String(e) }); }
+    } catch (e: any) { this.post({ type: 'serverResult', ok: false, error: e.message ?? String(e), field: e instanceof FieldError ? e.field : undefined }); }
   }
 
   /**
@@ -99,10 +99,8 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
       const original = requested && this.hub.servers.linuxSync().some((s) => s.name === requested) ? requested : undefined;
       if (requested && !original) { throw new Error(`The server "${requested}" no longer exists.`); }
       const input = SidebarView.linuxInput(m, SidebarView.envOf(m));
-      const err = validateLinux(input, false)
-        ?? (!original && input.auth === 'password' && !input.password ? 'Enter the password.' : undefined)
-        ?? (!original && input.auth === 'key' && !input.key?.trim() ? 'Paste the private key.' : undefined);
-      if (err) { throw new Error(err); }
+      const err = checkLinux(input, !original);
+      if (err) { throw err; }
       const saved = original ? await this.hub.servers.credentials(original) : {};
       const env: Record<string, string> = {};
       for (const [k, v] of Object.entries(input.env)) { env[k] = v || saved.env?.[k] || ''; }
@@ -114,11 +112,11 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
         // A newly pasted key never inherits the passphrase of the saved one.
         passphrase: input.auth === 'key' ? (input.passphrase || (newKey ? undefined : saved.passphrase)) : undefined,
       };
-      if (input.auth === 'password' && !target.password) { throw new Error('Enter the password.'); }
-      if (input.auth === 'key' && !target.privateKey) { throw new Error('Paste the private key.'); }
+      if (input.auth === 'password' && !target.password) { throw new FieldError('password', 'Enter the password.'); }
+      if (input.auth === 'key' && !target.privateKey) { throw new FieldError('key', 'Paste the private key.'); }
       const text = await this.hub.remote.test(target);
       this.post({ type: 'serverTest', ok: true, text: text || `Connected to ${input.user}@${input.host}.` });
-    } catch (e: any) { this.post({ type: 'serverTest', ok: false, text: e?.message ?? String(e) }); }
+    } catch (e: any) { this.post({ type: 'serverTest', ok: false, text: e?.message ?? String(e), field: e instanceof FieldError ? e.field : undefined }); }
   }
 
   private async onMessage(m: any): Promise<void> {
@@ -157,9 +155,9 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
       }
       case 'cloneServer': {
         const kind = m.kind === 'linux' ? 'linux' : 'mcp', name = String(m.name ?? '');
-        const newName = await vscode.window.showInputBox({ prompt: `Name for the copy of "${name}"`, value: `${name}-copy`, validateInput: (x) => (/^[A-Za-z0-9][w.-]{0,63}$/.test(x) ? undefined : 'Use letters, digits, dots, dashes or underscores.') });
-        if (!newName) { break; }
-        try { await hub.servers.clone(kind, name, newName); this.refresh(); } catch (e: any) { void vscode.window.showErrorMessage(e.message ?? String(e)); }
+        const newName = await vscode.window.showInputBox({ prompt: `Name for the copy of "${name}"`, value: `${name}-copy`, validateInput: (x) => validateServerName(kind, x.trim()) });
+        if (!newName?.trim()) { break; }
+        try { await hub.servers.clone(kind, name, newName.trim()); this.refresh(); } catch (e: any) { void vscode.window.showErrorMessage(e.message ?? String(e)); }
         break;
       }
     }
