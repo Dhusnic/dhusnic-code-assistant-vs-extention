@@ -1,0 +1,10 @@
+src/**
+out/test/**
+**/*.map
+node_modules/**
+.vscode/**
+tsconfig.json
+deploy.ps1
+*.vsix
+out/e2e/**
+.e2e/**

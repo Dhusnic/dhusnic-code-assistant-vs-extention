@@ -1,0 +1,375 @@
+{
+    "name":  "infraon-code-assistant",
+    "displayName":  "Infraon Code Assistant",
+    "description":  "Agentic AI coding assistant powered by the company-hosted LLM",
+    "version":  "0.18.0",
+    "publisher":  "infraon",
+    "engines":  {
+                    "vscode":  "^1.90.0"
+                },
+    "categories":  [
+                       "AI",
+                       "Chat"
+                   ],
+    "main":  "./out/host/extension.js",
+    "activationEvents":  [
+                             "onStartupFinished",
+                             "onWebviewPanel:infraonAssistant.session"
+                         ],
+    "contributes":  {
+                        "viewsContainers":  {
+                                                "activitybar":  [
+                                                                    {
+                                                                        "id":  "infraonAssistant",
+                                                                        "title":  "Infraon Assistant",
+                                                                        "icon":  "media/icon.svg"
+                                                                    }
+                                                                ]
+                                            },
+                        "views":  {
+                                      "infraonAssistant":  [
+                                                               {
+                                                                   "type":  "webview",
+                                                                   "id":  "infraonAssistant.sessions",
+                                                                   "name":  "Infraon Assistant"
+                                                               }
+                                                           ]
+                                  },
+                        "commands":  [
+                                         {
+                                             "command":  "infraonAssistant.setApiKey",
+                                             "title":  "Infraon Assistant: Set API Key"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.explainSelection",
+                                             "title":  "Infraon Assistant: Explain Selection"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.fixSelection",
+                                             "title":  "Infraon Assistant: Fix Selection"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.toggleInlineCompletions",
+                                             "title":  "Infraon Assistant: Toggle Inline Completions"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.newSession",
+                                             "title":  "Infraon Assistant: New Session",
+                                             "icon":  "$(add)"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.inlineEdit",
+                                             "title":  "Infraon Assistant: Edit Selection"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.inlineEdit.accept",
+                                             "title":  "Infraon Assistant: Accept Inline Edit"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.inlineEdit.reject",
+                                             "title":  "Infraon Assistant: Reject Inline Edit"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.fixDiagnostic",
+                                             "title":  "Infraon Assistant: Fix Problem"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.fixInSession",
+                                             "title":  "Infraon Assistant: Fix Problem in a Session"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.searchSessions",
+                                             "title":  "Infraon Assistant: Search All Sessions"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.editMemory",
+                                             "title":  "Infraon Assistant: Edit Project Memory"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.manageSchedules",
+                                             "title":  "Infraon Assistant: Scheduled Tasks"
+                                         },
+                                         {
+                                             "command":  "infraonAssistant.openPermissions",
+                                             "title":  "Infraon Assistant: Edit Permission Rules and Hooks"
+                                         }
+                                     ],
+                        "menus":  {
+                                      "editor/context":  [
+                                                             {
+                                                                 "command":  "infraonAssistant.explainSelection",
+                                                                 "when":  "editorHasSelection",
+                                                                 "group":  "infraon@1"
+                                                             },
+                                                             {
+                                                                 "command":  "infraonAssistant.fixSelection",
+                                                                 "when":  "editorHasSelection",
+                                                                 "group":  "infraon@2"
+                                                             }
+                                                         ],
+                                      "view/title":  [
+                                                         {
+                                                             "command":  "infraonAssistant.newSession",
+                                                             "when":  "view == infraonAssistant.sessions",
+                                                             "group":  "navigation"
+                                                         }
+                                                     ],
+                                      "commandPalette":  [
+                                                             {
+                                                                 "command":  "infraonAssistant.inlineEdit",
+                                                                 "when":  "editorIsOpen"
+                                                             },
+                                                             {
+                                                                 "command":  "infraonAssistant.inlineEdit.accept",
+                                                                 "when":  "infraonAssistant.inlineEditPending"
+                                                             },
+                                                             {
+                                                                 "command":  "infraonAssistant.inlineEdit.reject",
+                                                                 "when":  "infraonAssistant.inlineEditPending"
+                                                             },
+                                                             {
+                                                                 "command":  "infraonAssistant.fixDiagnostic",
+                                                                 "when":  "false"
+                                                             },
+                                                             {
+                                                                 "command":  "infraonAssistant.fixInSession",
+                                                                 "when":  "false"
+                                                             }
+                                                         ]
+                                  },
+                        "configuration":  {
+                                              "title":  "Infraon Assistant",
+                                              "properties":  {
+                                                                 "infraonAssistant.baseUrl":  {
+                                                                                                  "type":  "string",
+                                                                                                  "default":  "https://172.16.48.75:30400/v1",
+                                                                                                  "description":  "OpenAI-compatible base URL of the company LLM."
+                                                                                              },
+                                                                 "infraonAssistant.model":  {
+                                                                                                "type":  "string",
+                                                                                                "default":  "qwen3-coder-next",
+                                                                                                "description":  "Model name served by the LLM gateway."
+                                                                                            },
+                                                                 "infraonAssistant.allowSelfSignedTls":  {
+                                                                                                             "type":  "boolean",
+                                                                                                             "default":  true,
+                                                                                                             "description":  "Accept the internal gateway\u0027s self-signed TLS certificate."
+                                                                                                         },
+                                                                 "infraonAssistant.maxIterations":  {
+                                                                                                        "type":  "number",
+                                                                                                        "default":  25,
+                                                                                                        "description":  "Max tool-call rounds per request."
+                                                                                                    },
+                                                                 "infraonAssistant.autoApprove":  {
+                                                                                                      "type":  "boolean",
+                                                                                                      "default":  false,
+                                                                                                      "description":  "Skip approval prompts for file edits and commands (not recommended)."
+                                                                                                  },
+                                                                 "infraonAssistant.temperature":  {
+                                                                                                      "type":  "number",
+                                                                                                      "default":  0.2
+                                                                                                  },
+                                                                 "infraonAssistant.contextWindow":  {
+                                                                                                        "type":  "number",
+                                                                                                        "default":  131072,
+                                                                                                        "description":  "Context window (tokens) of the model. Used for the usage meter and auto-compaction."
+                                                                                                    },
+                                                                 "infraonAssistant.autoCompactThreshold":  {
+                                                                                                               "type":  "number",
+                                                                                                               "default":  0.75,
+                                                                                                               "minimum":  0.3,
+                                                                                                               "maximum":  0.95,
+                                                                                                               "description":  "Fraction of the context window at which old conversation is trimmed/summarized automatically."
+                                                                                                           },
+                                                                 "infraonAssistant.mcpServers":  {
+                                                                                                     "type":  "object",
+                                                                                                     "default":  {
+
+                                                                                                                 },
+                                                                                                     "markdownDescription":  "MCP (Model Context Protocol) servers started over stdio. Example: `{ \"docs\": { \"command\": \"npx\", \"args\": [\"-y\", \"some-mcp-server\"], \"env\": { \"TOKEN\": \"...\" } } }`. A workspace `.mcp.json` file is also supported and asks for approval first."
+                                                                                                 },
+                                                                 "infraonAssistant.inlineCompletions.enabled":  {
+                                                                                                                    "type":  "boolean",
+                                                                                                                    "default":  true,
+                                                                                                                    "description":  "Show AI ghost-text suggestions while typing (sent only to the company LLM)."
+                                                                                                                },
+                                                                 "infraonAssistant.inlineCompletions.debounceMs":  {
+                                                                                                                       "type":  "number",
+                                                                                                                       "default":  450,
+                                                                                                                       "minimum":  100,
+                                                                                                                       "description":  "Wait this long after you stop typing before requesting a suggestion."
+                                                                                                                   },
+                                                                 "infraonAssistant.inlineCompletions.maxTokens":  {
+                                                                                                                      "type":  "number",
+                                                                                                                      "default":  128,
+                                                                                                                      "minimum":  16,
+                                                                                                                      "maximum":  512,
+                                                                                                                      "description":  "Maximum length of a suggestion."
+                                                                                                                  },
+                                                                 "infraonAssistant.inlineCompletions.model":  {
+                                                                                                                  "type":  "string",
+                                                                                                                  "default":  "",
+                                                                                                                  "description":  "Model for completions. Empty = use the model selected in the chat."
+                                                                                                              },
+                                                                 "infraonAssistant.ripgrepPath":  {
+                                                                                                      "type":  "string",
+                                                                                                      "default":  "",
+                                                                                                      "description":  "Optional path to a ripgrep (rg) binary used for fast code search. Empty = use VS Code\u0027s bundled copy, then rg on PATH, then a built-in fallback."
+                                                                                                  },
+                                                                 "infraonAssistant.searchEngine":  {
+                                                                                                       "type":  "string",
+                                                                                                       "enum":  [
+                                                                                                                    "auto",
+                                                                                                                    "ripgrep",
+                                                                                                                    "builtin"
+                                                                                                                ],
+                                                                                                       "default":  "auto",
+                                                                                                       "enumDescriptions":  [
+                                                                                                                                "Use the indexed built-in engine when the file index is ready (best on large repos), otherwise ripgrep.",
+                                                                                                                                "Always use ripgrep.",
+                                                                                                                                "Always use the built-in indexed engine (parallel, .gitignore-aware, source-first)."
+                                                                                                                            ],
+                                                                                                       "description":  "Engine used by the code-search tool."
+                                                                                                   },
+                                                                 "infraonAssistant.maxConcurrentAgents":  {
+                                                                                                              "type":  "number",
+                                                                                                              "default":  4,
+                                                                                                              "minimum":  1,
+                                                                                                              "maximum":  32,
+                                                                                                              "description":  "How many agents (across all sessions) may talk to the LLM at the same time. Extra agents wait in a queue."
+                                                                                                          },
+                                                                 "infraonAssistant.notifications.enabled":  {
+                                                                                                                "type":  "boolean",
+                                                                                                                "default":  true,
+                                                                                                                "description":  "Show a VS Code notification when a session needs you or finishes."
+                                                                                                            },
+                                                                 "infraonAssistant.notifications.minDurationSeconds":  {
+                                                                                                                           "type":  "number",
+                                                                                                                           "default":  30,
+                                                                                                                           "minimum":  0,
+                                                                                                                           "description":  "Only announce finished tasks that ran at least this long."
+                                                                                                                       },
+                                                                 "infraonAssistant.notifications.taskDone":  {
+                                                                                                                 "type":  "boolean",
+                                                                                                                 "default":  true,
+                                                                                                                 "description":  "Notify when a long task finishes."
+                                                                                                             },
+                                                                 "infraonAssistant.notifications.needsInput":  {
+                                                                                                                   "type":  "boolean",
+                                                                                                                   "default":  true,
+                                                                                                                   "description":  "Notify when an approval or question is waiting."
+                                                                                                               },
+                                                                 "infraonAssistant.notifications.backgroundAgents":  {
+                                                                                                                         "type":  "boolean",
+                                                                                                                         "default":  true,
+                                                                                                                         "description":  "Notify when a background agent finishes."
+                                                                                                                     },
+                                                                 "infraonAssistant.notifications.errors":  {
+                                                                                                               "type":  "boolean",
+                                                                                                               "default":  true,
+                                                                                                               "description":  "Notify when an agent stops with an error."
+                                                                                                           },
+                                                                 "infraonAssistant.redactSecrets":  {
+                                                                                                        "type":  "boolean",
+                                                                                                        "default":  true,
+                                                                                                        "description":  "Mask keys, tokens and passwords before text is sent to the LLM. Real values stay on this machine."
+                                                                                                    },
+                                                                 "infraonAssistant.auditLog":  {
+                                                                                                   "type":  "boolean",
+                                                                                                   "default":  true,
+                                                                                                   "description":  "Keep a local log of every command, edit and approval per session."
+                                                                                               },
+                                                                 "infraonAssistant.agentWorktrees":  {
+                                                                                                         "type":  "boolean",
+                                                                                                         "default":  false,
+                                                                                                         "description":  "Run each editing sub-agent in its own git worktree and branch, then merge from the Changes panel."
+                                                                                                     },
+                                                                 "infraonAssistant.visibleTerminal":  {
+                                                                                                          "type":  "boolean",
+                                                                                                          "default":  true,
+                                                                                                          "description":  "Let the agent run commands and dev servers in a VS Code terminal you can watch."
+                                                                                                      },
+                                                                 "infraonAssistant.modelRouting":  {
+                                                                                                       "type":  "object",
+                                                                                                       "default":  {
+
+                                                                                                                   },
+                                                                                                       "properties":  {
+                                                                                                                          "subagent":  {
+                                                                                                                                           "type":  "string"
+                                                                                                                                       },
+                                                                                                                          "completion":  {
+                                                                                                                                             "type":  "string"
+                                                                                                                                         },
+                                                                                                                          "summary":  {
+                                                                                                                                          "type":  "string"
+                                                                                                                                      },
+                                                                                                                          "commit":  {
+                                                                                                                                         "type":  "string"
+                                                                                                                                     }
+                                                                                                                      },
+                                                                                                       "additionalProperties":  false,
+                                                                                                       "description":  "Use specific models for smaller jobs. Anything left empty uses the model selected in the chat."
+                                                                                                   },
+                                                                 "infraonAssistant.teamSkills":  {
+                                                                                                     "type":  "array",
+                                                                                                     "default":  [
+
+                                                                                                                 ],
+                                                                                                     "items":  {
+                                                                                                                   "type":  [
+                                                                                                                                "string",
+                                                                                                                                "object"
+                                                                                                                            ]
+                                                                                                               },
+                                                                                                     "markdownDescription":  "Shared skill libraries: folders or git URLs that everyone on the team receives automatically."
+                                                                                                 },
+                                                                 "infraonAssistant.policyUrl":  {
+                                                                                                    "type":  "string",
+                                                                                                    "default":  "",
+                                                                                                    "description":  "Optional URL of the central policy file. A policy installed on the machine takes priority."
+                                                                                                }
+                                                             }
+                                          },
+                        "keybindings":  [
+                                            {
+                                                "command":  "infraonAssistant.newSession",
+                                                "key":  "ctrl+alt+n",
+                                                "mac":  "cmd+alt+n"
+                                            },
+                                            {
+                                                "command":  "infraonAssistant.inlineEdit",
+                                                "key":  "ctrl+i",
+                                                "mac":  "cmd+i",
+                                                "when":  "editorTextFocus \u0026\u0026 !editorReadonly"
+                                            },
+                                            {
+                                                "command":  "infraonAssistant.inlineEdit.accept",
+                                                "key":  "ctrl+enter",
+                                                "mac":  "cmd+enter",
+                                                "when":  "infraonAssistant.inlineEditPending \u0026\u0026 isInDiffEditor"
+                                            },
+                                            {
+                                                "command":  "infraonAssistant.inlineEdit.reject",
+                                                "key":  "escape",
+                                                "when":  "infraonAssistant.inlineEditPending \u0026\u0026 isInDiffEditor \u0026\u0026 !findWidgetVisible"
+                                            }
+                                        ]
+                    },
+    "scripts":  {
+                    "compile":  "tsc -p .",
+                    "watch":  "tsc -watch -p .",
+                    "package":  "vsce package",
+                    "test":  "tsc -p . \u0026\u0026 node --test \"out/test/*.test.js\"",
+                    "test:e2e":  "tsc -p . \u0026\u0026 node out/e2e/run.js"
+                },
+    "devDependencies":  {
+                            "@types/node":  "^20.0.0",
+                            "@types/vscode":  "^1.90.0",
+                            "@vscode/test-electron":  "^2.5.2",
+                            "@vscode/vsce":  "^3.0.0",
+                            "mermaid":  "^11.17.2",
+                            "typescript":  "^5.5.0"
+                        },
+    "icon":  "media/icon.png"
+}
