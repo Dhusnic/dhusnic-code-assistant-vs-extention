@@ -692,6 +692,89 @@ export class Hub {
     await this.loadMcp();
   }
 
+  /* ------------------------------------------------------------ Linux server management */
+
+  async getLinuxServerList(): Promise<Array<{ name: string; host: string; port: number; user: string; auth: string; status?: string }>> {
+    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
+    return Object.entries(servers).map(([name, cfg]) => ({
+      name,
+      host: cfg.host,
+      port: cfg.port || 22,
+      user: cfg.user,
+      auth: cfg.auth || 'password',
+      status: 'connected' // Would check connection status here
+    }));
+  }
+
+  async addLinuxServer(name: string, host: string, port: number, user: string, auth: string, password?: string, key?: string, env?: Record<string, string>): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
+    
+    // Store credentials securely
+    const credKey = `linuxServer_${name}`;
+    if (password) {
+      await this.ctx.secrets.store(`${credKey}_password`, password);
+    }
+    if (key) {
+      await this.ctx.secrets.store(`${credKey}_key`, key);
+    }
+    
+    servers[name] = { host, port, user, auth, env };
+    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
+  }
+
+  async updateLinuxServer(idx: number, name: string, host: string, port: number, user: string, auth: string, password?: string, key?: string, env?: Record<string, string>): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
+    const keys = Object.keys(servers);
+    const oldName = keys[idx];
+    
+    // Remove old credentials
+    const oldCredKey = `linuxServer_${oldName}`;
+    await this.ctx.secrets.delete(`${oldCredKey}_password`);
+    await this.ctx.secrets.delete(`${oldCredKey}_key`);
+    
+    // Store new credentials
+    const credKey = `linuxServer_${name}`;
+    if (password) {
+      await this.ctx.secrets.store(`${credKey}_password`, password);
+    }
+    if (key) {
+      await this.ctx.secrets.store(`${credKey}_key`, key);
+    }
+    
+    delete servers[oldName];
+    servers[name] = { host, port, user, auth, env };
+    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
+  }
+
+  async deleteLinuxServer(idx: number): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
+    const keys = Object.keys(servers);
+    const name = keys[idx];
+    
+    // Remove credentials
+    await this.ctx.secrets.delete(`linuxServer_${name}_password`);
+    await this.ctx.secrets.delete(`linuxServer_${name}_key`);
+    
+    delete servers[name];
+    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
+  }
+
+  async cloneLinuxServer(idx: number, newName: string): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
+    const keys = Object.keys(servers);
+    const oldName = keys[idx];
+    const cfg = servers[oldName];
+    
+    servers[newName] = { ...cfg };
+    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
+  }
+
+  async getLinuxServerCredentials(name: string): Promise<{ password?: string; key?: string }> {
+    const password = await this.ctx.secrets.get(`linuxServer_${name}_password`);
+    const key = await this.ctx.secrets.get(`linuxServer_${name}_key`);
+    return { password, key };
+  }
+
   async getSecret(key: string): Promise<string | undefined> {
     return await this.ctx.secrets.get(key);
   }

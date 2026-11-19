@@ -39,9 +39,19 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
     if (!this.view?.visible) { return; }
     void Promise.all([
       this.hub.sessionsView(),
-      this.hub.getServerList()
-    ]).then(([sessions, servers]) => {
-      void this.view?.webview.postMessage({ type: 'data', llm: this.hub.llmInfo(), sessions, servers, skills: this.hub.skillViews(), skillErrors: this.hub.skillErrors.length, e2e: this.hub.e2e });
+      this.hub.getServerList(),
+      this.hub.getLinuxServerList()
+    ]).then(([sessions, mcpServers, linuxServers]) => {
+      void this.view?.webview.postMessage({ 
+        type: 'data', 
+        llm: this.hub.llmInfo(), 
+        sessions, 
+        mcpServers, 
+        linuxServers, 
+        skills: this.hub.skillViews(), 
+        skillErrors: this.hub.skillErrors.length, 
+        e2e: this.hub.e2e 
+      });
     });
   }
 
@@ -103,6 +113,49 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
         const idx = Number(m.idx);
         const newName = String(m.newName);
         await hub.cloneServer(idx, newName);
+        this.refresh();
+        break;
+      }
+      case 'addLinuxServer': {
+        const name = String(m.name);
+        const host = String(m.host);
+        const port = Number(m.port) || 22;
+        const user = String(m.user);
+        const auth = String(m.auth);
+        const password = m.password;
+        const key = m.key;
+        const env = m.env && typeof m.env === 'object' ? m.env : {};
+        await hub.addLinuxServer(name, host, port, user, auth, password, key, env);
+        this.refresh();
+        break;
+      }
+      case 'updateLinuxServer': {
+        const idx = Number(m.idx);
+        const name = String(m.name);
+        const host = String(m.host);
+        const port = Number(m.port) || 22;
+        const user = String(m.user);
+        const auth = String(m.auth);
+        const password = m.password;
+        const key = m.key;
+        const env = m.env && typeof m.env === 'object' ? m.env : {};
+        await hub.updateLinuxServer(idx, name, host, port, user, auth, password, key, env);
+        this.refresh();
+        break;
+      }
+      case 'deleteLinuxServer': {
+        const idx = Number(m.idx);
+        const servers = await hub.getLinuxServerList();
+        if (idx >= 0 && idx < servers.length) {
+          await hub.deleteLinuxServer(idx);
+          this.refresh();
+        }
+        break;
+      }
+      case 'cloneLinuxServer': {
+        const idx = Number(m.idx);
+        const newName = String(m.newName);
+        await hub.cloneLinuxServer(idx, newName);
         this.refresh();
         break;
       }

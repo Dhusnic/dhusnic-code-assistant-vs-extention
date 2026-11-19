@@ -102,17 +102,40 @@ export function buildSidebarHtml(p: HtmlParts): string {
 <div id="serverDialog" class="dialog-overlay" hidden>
   <div class="dialog-content">
     <div class="dialog-header">
-      <h3 id="dialogTitle">Add Server</h3>
+      <h3 id="dialogTitle">Add Linux Server</h3>
       <button class="icon-btn dialog-close" id="dialogClose">✕</button>
     </div>
     <div class="dialog-body">
       <div class="form-group">
         <label for="serverName">Server Name</label>
-        <input type="text" id="serverName" placeholder="e.g., github, openai" required>
+        <input type="text" id="serverName" placeholder="e.g., production, staging" required>
       </div>
       <div class="form-group">
-        <label for="serverCommand">Full Command</label>
-        <input type="text" id="serverCommand" placeholder="e.g., npx -y @modelcontextprotocol/server-github" required>
+        <label for="serverHost">IP / Hostname</label>
+        <input type="text" id="serverHost" placeholder="e.g., 192.168.1.100 or example.com" required>
+      </div>
+      <div class="form-group">
+        <label for="serverPort">Port</label>
+        <input type="number" id="serverPort" placeholder="22" value="22" min="1" max="65535">
+      </div>
+      <div class="form-group">
+        <label for="serverUser">Username</label>
+        <input type="text" id="serverUser" placeholder="e.g., ubuntu, root" required>
+      </div>
+      <div class="form-group">
+        <label for="serverAuth">Authentication</label>
+        <select id="serverAuth">
+          <option value="password">Password</option>
+          <option value="key">SSH Key</option>
+        </select>
+      </div>
+      <div class="form-group" id="passwordGroup">
+        <label for="serverPassword">Password</label>
+        <input type="password" id="serverPassword" placeholder="Enter password">
+      </div>
+      <div class="form-group" id="keyGroup" hidden>
+        <label for="serverKey">SSH Private Key</label>
+        <textarea id="serverKey" placeholder="Paste your private key here..." rows="4"></textarea>
       </div>
       <div class="form-group">
         <label>Environment Variables</label>
