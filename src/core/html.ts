@@ -89,66 +89,49 @@ export function buildSidebarHtml(p: HtmlParts): string {
   <div class="sk-sbar"><button class="link" id="skNewSide">＋ New skill</button><button class="link" id="skManageSide">Manage…</button></div>
   <div id="skillList"></div></div></section>
 <section id="serverSec" class="sec open"><h3 class="sec-h" data-sec="serverSec"><span class="icon">${SERVER}</span> Servers</h3><div class="sec-b">
-  <div class="server-bar">
-    <button class="btn sec-btn" id="addServerBtn">＋ Add Server</button>
-  </div>
+  <div class="sk-sbar"><button class="link" id="addServerBtn">＋ Add server</button></div>
   <div id="serverList"></div>
 </div></section>
 <section id="storeSec" class="sec"><h3 class="sec-h" data-sec="storeSec">Storage</h3><div class="sec-b">
   <p class="muted">Checks that every saved session can be read back, repairs what it can, and runs a write → read → compare self-test.</p>
   <button class="btn sec-btn" id="verifyBtn">Check storage</button><div id="verify"></div></div></section>
 
-<!-- Server Dialog -->
-<div id="serverDialog" class="dialog-overlay" hidden>
-  <div class="dialog-content">
-    <div class="dialog-header">
-      <h3 id="dialogTitle">Add Linux Server</h3>
-      <button class="icon-btn dialog-close" id="dialogClose">✕</button>
+<div id="serverDialog" class="modal" hidden><div class="mcard">
+  <div class="mtitle"><span id="dialogTitle">Add server</span><button class="icon-btn" id="dialogClose" title="Close (Esc)">✕</button></div>
+  <div class="sv-form">
+    <label for="serverKind">Type</label>
+    <select id="serverKind"><option value="linux">Linux server (SSH)</option><option value="mcp">MCP server</option></select>
+    <label for="serverName">Name</label>
+    <input id="serverName" placeholder="production" maxlength="64" autocomplete="off">
+    <div id="mcpFields">
+      <label for="serverCommand">Command</label>
+      <input id="serverCommand" placeholder="npx -y @company/docs-mcp --port 3000" autocomplete="off" spellcheck="false">
+      <div class="muted small">The program and its arguments. Quote an argument that contains spaces.</div>
     </div>
-    <div class="dialog-body">
-      <div class="form-group">
-        <label for="serverName">Server Name</label>
-        <input type="text" id="serverName" placeholder="e.g., production, staging" required>
-      </div>
-      <div class="form-group">
-        <label for="serverHost">IP / Hostname</label>
-        <input type="text" id="serverHost" placeholder="e.g., 192.168.1.100 or example.com" required>
-      </div>
-      <div class="form-group">
-        <label for="serverPort">Port</label>
-        <input type="number" id="serverPort" placeholder="22" value="22" min="1" max="65535">
-      </div>
-      <div class="form-group">
-        <label for="serverUser">Username</label>
-        <input type="text" id="serverUser" placeholder="e.g., ubuntu, root" required>
-      </div>
-      <div class="form-group">
-        <label for="serverAuth">Authentication</label>
-        <select id="serverAuth">
-          <option value="password">Password</option>
-          <option value="key">SSH Key</option>
-        </select>
-      </div>
-      <div class="form-group" id="passwordGroup">
-        <label for="serverPassword">Password</label>
-        <input type="password" id="serverPassword" placeholder="Enter password">
-      </div>
-      <div class="form-group" id="keyGroup" hidden>
-        <label for="serverKey">SSH Private Key</label>
-        <textarea id="serverKey" placeholder="Paste your private key here..." rows="4"></textarea>
-      </div>
-      <div class="form-group">
-        <label>Environment Variables</label>
-        <div id="envList"></div>
-        <button class="btn small" id="addEnvBtn">＋ Add Variable</button>
-      </div>
+    <div id="linuxFields">
+      <div class="sv-row"><div><label for="serverHost">IP or host name</label><input id="serverHost" placeholder="192.168.1.100" autocomplete="off"></div>
+        <div class="sv-port"><label for="serverPort">Port</label><input id="serverPort" type="number" value="22" min="1" max="65535"></div></div>
+      <label for="serverUser">User name</label>
+      <input id="serverUser" placeholder="ubuntu" autocomplete="off">
+      <label for="serverAuth">Authentication</label>
+      <select id="serverAuth"><option value="password">Password</option><option value="key">SSH private key</option></select>
+      <div id="passwordGroup"><label for="serverPassword">Password</label><input id="serverPassword" type="password" autocomplete="new-password"></div>
+      <div id="keyGroup" hidden><label for="serverKey">Private key</label><textarea id="serverKey" rows="4" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+        <label for="serverPassphrase">Key passphrase (optional)</label><input id="serverPassphrase" type="password" autocomplete="new-password"></div>
+      <div class="muted small">Credentials are kept in VS Code's encrypted secret storage, never in settings.</div>
+      <label for="serverNotes">Notes for the agent</label>
+      <textarea id="serverNotes" class="sv-notes" rows="3" maxlength="4000" spellcheck="false" placeholder="App in /opt/app, service app.service, health check curl -fsS localhost:8080/health"></textarea>
+      <div class="muted small">The agent reads these notes when it works on this server. Do not put secrets here.</div>
+      <label class="sv-check" for="serverAlwaysAsk"><input id="serverAlwaysAsk" type="checkbox" checked><span>Ask me before every change on this server</span></label>
     </div>
-    <div class="dialog-footer">
-      <button class="btn" id="dialogCancel">Cancel</button>
-      <button class="btn primary" id="dialogSave">Save Server</button>
-    </div>
+    <label>Environment variables</label>
+    <div id="envList"></div>
+    <button class="link" id="addEnvBtn">＋ Add variable</button>
+    <div class="err small" id="serverErr"></div>
   </div>
-</div>
+  <div class="sv-test small" id="serverTest" role="status" aria-live="polite"></div>
+  <div class="actions"><button class="btn sec" id="serverTestBtn" title="Connect with these details without saving">Test connection</button><span class="spacer"></span><button class="btn sec" id="dialogCancel">Cancel</button><button class="btn" id="dialogSave">Save</button></div>
+</div></div>
 ${scripts({ ...p, mermaidUri: undefined })}
 </body></html>`;
 }

@@ -24,6 +24,8 @@ import { SessionPanel } from './sessionPanel';
 import { createVsCodeTools } from './vscodeTools';
 import type { EditorHost } from './features/editorActions';
 import { SafetyCenter } from './features/guard';
+import { ServerRegistry } from './features/servers';
+import { RemoteService } from './features/remote';
 import { createNotifier } from './features/notifications';
 import type { Scheduler } from './features/scheduler';
 import { createTerminalRunner } from './features/terminalRunner';
@@ -62,6 +64,7 @@ export class Hub {
   policy: CentralPolicy = {};
   readonly policyReady: Promise<void>;
   readonly safety: SafetyCenter;
+  readonly remote: RemoteService;
   private terminal = createTerminalRunner();
   private memoryCache = new MemoryCache();
   private notifier: ReturnType<typeof createNotifier>;
@@ -75,6 +78,11 @@ export class Hub {
     this.safety = new SafetyCenter(this);
     this.notifier = createNotifier({ openSession: (id) => this.openSession(id), isPanelVisible: (sid) => !!this.panels.get(sid)?.panel.visible });
     ctx.subscriptions.push(this.terminal, this.notifier);
+    this.remote = new RemoteService({ ctx, servers: this.servers, addKnownSecret: (v, k) => this.safety.addKnownSecret(v, k), onStatus: () => this.scheduleRefresh() });
+    this.safety.remoteAlwaysAsk = (server) => this.remote.alwaysAsk(server);
+    ctx.subscriptions.push(this.remote);
+    // Saved server passwords are masked from the first message on, even before the agent connects.
+    void this.remote.preloadSecrets();
     this.policyReady = loadPolicy({ url: this.cfg.get<string>('policyUrl', '') || undefined, cacheFile: path.join(ctx.globalStorageUri.fsPath, 'policy-cache.json') }).then((r) => {
       this.policy = r.policy;
       for (const e of r.errors) { this.output.appendLine(`[policy] ${e}`); }
@@ -251,7 +259,7 @@ export class Hub {
     }));
   }
 
-  private allTools() { return [...this.fsTools, ...createVsCodeTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.mcp.tools()]; }
+  private allTools() { return [...this.fsTools, ...createVsCodeTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.mcp.tools()]; }
 
   checkpointsFor(sid: string, aid: string): CheckpointStore { return new CheckpointStore(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid, aid)); }
 
@@ -643,144 +651,12 @@ export class Hub {
 
   openPanelIds(): string[] { return [...this.panels.keys()]; }
 
-  /* ------------------------------------------------------------ server management */
+  /* ------------------------------------------------------------ servers (sidebar) */
 
-  async getServerList(): Promise<Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; status?: string }>> {
-    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
-    return Object.entries(servers).map(([name, cfg]) => ({
-      name,
-      command: cfg.command,
-      args: cfg.args,
-      env: cfg.env,
-      status: this.mcp.status().find((s) => s.name === name)?.status
-    }));
-  }
-
-  async addServer(name: string, command: string, args: string[], env: Record<string, string>): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
-    servers[name] = { command, args, env };
-    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
-    await this.loadMcp();
-  }
-
-  async updateServer(idx: number, name: string, command: string, args: string[], env: Record<string, string>): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
-    const keys = Object.keys(servers);
-    const oldName = keys[idx];
-    delete servers[oldName];
-    servers[name] = { command, args, env };
-    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
-    await this.loadMcp();
-  }
-
-  async deleteServer(idx: number): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
-    const keys = Object.keys(servers);
-    const name = keys[idx];
-    delete servers[name];
-    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
-    await this.loadMcp();
-  }
-
-  async cloneServer(idx: number, newName: string): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
-    const keys = Object.keys(servers);
-    const oldName = keys[idx];
-    const cfg = servers[oldName];
-    servers[newName] = { ...cfg };
-    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
-    await this.loadMcp();
-  }
-
-  /* ------------------------------------------------------------ Linux server management */
-
-  async getLinuxServerList(): Promise<Array<{ name: string; host: string; port: number; user: string; auth: string; status?: string }>> {
-    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
-    return Object.entries(servers).map(([name, cfg]) => ({
-      name,
-      host: cfg.host,
-      port: cfg.port || 22,
-      user: cfg.user,
-      auth: cfg.auth || 'password',
-      status: 'connected' // Would check connection status here
-    }));
-  }
-
-  async addLinuxServer(name: string, host: string, port: number, user: string, auth: string, password?: string, key?: string, env?: Record<string, string>): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
-    
-    // Store credentials securely
-    const credKey = `linuxServer_${name}`;
-    if (password) {
-      await this.ctx.secrets.store(`${credKey}_password`, password);
-    }
-    if (key) {
-      await this.ctx.secrets.store(`${credKey}_key`, key);
-    }
-    
-    servers[name] = { host, port, user, auth, env };
-    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
-  }
-
-  async updateLinuxServer(idx: number, name: string, host: string, port: number, user: string, auth: string, password?: string, key?: string, env?: Record<string, string>): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
-    const keys = Object.keys(servers);
-    const oldName = keys[idx];
-    
-    // Remove old credentials
-    const oldCredKey = `linuxServer_${oldName}`;
-    await this.ctx.secrets.delete(`${oldCredKey}_password`);
-    await this.ctx.secrets.delete(`${oldCredKey}_key`);
-    
-    // Store new credentials
-    const credKey = `linuxServer_${name}`;
-    if (password) {
-      await this.ctx.secrets.store(`${credKey}_password`, password);
-    }
-    if (key) {
-      await this.ctx.secrets.store(`${credKey}_key`, key);
-    }
-    
-    delete servers[oldName];
-    servers[name] = { host, port, user, auth, env };
-    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
-  }
-
-  async deleteLinuxServer(idx: number): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
-    const keys = Object.keys(servers);
-    const name = keys[idx];
-    
-    // Remove credentials
-    await this.ctx.secrets.delete(`linuxServer_${name}_password`);
-    await this.ctx.secrets.delete(`linuxServer_${name}_key`);
-    
-    delete servers[name];
-    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
-  }
-
-  async cloneLinuxServer(idx: number, newName: string): Promise<void> {
-    const servers = this.cfg.get<Record<string, any>>('linuxServers', {});
-    const keys = Object.keys(servers);
-    const oldName = keys[idx];
-    const cfg = servers[oldName];
-    
-    servers[newName] = { ...cfg };
-    await this.cfg.update('linuxServers', servers, vscode.ConfigurationTarget.Global);
-  }
-
-  async getLinuxServerCredentials(name: string): Promise<{ password?: string; key?: string }> {
-    const password = await this.ctx.secrets.get(`linuxServer_${name}_password`);
-    const key = await this.ctx.secrets.get(`linuxServer_${name}_key`);
-    return { password, key };
-  }
-
-  async getSecret(key: string): Promise<string | undefined> {
-    return await this.ctx.secrets.get(key);
-  }
-
-  async storeSecret(key: string, value: string): Promise<void> {
-    await this.ctx.secrets.store(key, value);
+  private serverRegistry?: ServerRegistry;
+  get servers(): ServerRegistry {
+    this.serverRegistry ??= new ServerRegistry(this.ctx, () => this.loadMcp(), (name) => this.mcp.status().find((s) => s.name === name)?.status);
+    return this.serverRegistry;
   }
 
   async deleteSecret(key: string): Promise<void> {

@@ -3,6 +3,8 @@ import * as fs from 'fs/promises';
 import { randomBytes } from 'crypto';
 import { buildSidebarHtml } from '../core/html';
 import type { Hub, SidebarSink } from './hub';
+import { LinuxInput, validateLinux } from './features/servers';
+import type { SshTarget } from '../core/ssh';
 
 /** Activity-bar view: LLM status and usage, and the session manager (all sessions, live agent activity). */
 export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
@@ -39,20 +41,84 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
     if (!this.view?.visible) { return; }
     void Promise.all([
       this.hub.sessionsView(),
-      this.hub.getServerList(),
-      this.hub.getLinuxServerList()
-    ]).then(([sessions, mcpServers, linuxServers]) => {
+      this.hub.servers.linuxList(),
+    ]).then(([sessions, linuxServers]) => {
+      const mcpServers = this.hub.servers.mcpList();
       void this.view?.webview.postMessage({ 
         type: 'data', 
         llm: this.hub.llmInfo(), 
         sessions, 
         mcpServers, 
-        linuxServers, 
+        linuxServers: linuxServers.map((s) => ({ ...s, connected: this.hub.remote.isConnected(s.name) })), 
         skills: this.hub.skillViews(), 
         skillErrors: this.hub.skillErrors.length, 
         e2e: this.hub.e2e 
       });
     });
+  }
+
+  private static envOf(m: any): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const row of Array.isArray(m.env) ? m.env : []) { const k = String(row?.[0] ?? '').trim(); if (k) { env[k] = String(row?.[1] ?? ''); } }
+    return env;
+  }
+
+  /** The Linux fields of a saveServer / testServer message. */
+  private static linuxInput(m: any, env: Record<string, string>): LinuxInput {
+    return {
+      name: String(m.name ?? '').trim(), host: String(m.host ?? '').trim(), port: Number(m.port), user: String(m.user ?? '').trim(),
+      auth: m.auth === 'key' ? 'key' : 'password', password: m.password ? String(m.password) : undefined, key: m.key ? String(m.key) : undefined,
+      passphrase: m.passphrase ? String(m.passphrase) : undefined, env,
+      notes: typeof m.notes === 'string' ? m.notes : undefined, alwaysAsk: m.alwaysAsk !== false,
+    };
+  }
+
+  /** Validates and saves a server from the dialog, then tells the dialog whether to close. */
+  private async saveServer(m: any): Promise<void> {
+    const original = typeof m.original === 'string' && m.original ? m.original : undefined;
+    const env = SidebarView.envOf(m);
+    try {
+      if (m.kind === 'linux') {
+        await this.hub.servers.saveLinux(original, SidebarView.linuxInput(m, env));
+      } else {
+        await this.hub.servers.saveMcp(original, { name: String(m.name ?? '').trim(), commandLine: String(m.commandLine ?? ''), env });
+      }
+      this.post({ type: 'serverResult', ok: true });
+      this.refresh();
+    } catch (e: any) { this.post({ type: 'serverResult', ok: false, error: e.message ?? String(e) }); }
+  }
+
+  /**
+   * Tries an SSH connection with the dialog's details without saving them. When editing, an empty credential or
+   * environment value falls back to the saved one; stored credentials never go back to the webview.
+   */
+  private async testServer(m: any): Promise<void> {
+    try {
+      if (m.kind !== 'linux') { throw new Error('Only Linux servers can be tested.'); }
+      const requested = typeof m.original === 'string' && m.original ? m.original : undefined;
+      const original = requested && this.hub.servers.linuxSync().some((s) => s.name === requested) ? requested : undefined;
+      if (requested && !original) { throw new Error(`The server "${requested}" no longer exists.`); }
+      const input = SidebarView.linuxInput(m, SidebarView.envOf(m));
+      const err = validateLinux(input, false)
+        ?? (!original && input.auth === 'password' && !input.password ? 'Enter the password.' : undefined)
+        ?? (!original && input.auth === 'key' && !input.key?.trim() ? 'Paste the private key.' : undefined);
+      if (err) { throw new Error(err); }
+      const saved = original ? await this.hub.servers.credentials(original) : {};
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(input.env)) { env[k] = v || saved.env?.[k] || ''; }
+      const newKey = input.key?.trim() ? input.key : undefined;
+      const target: SshTarget = {
+        name: input.name, host: input.host, port: input.port, user: input.user, env,
+        password: input.auth === 'password' ? (input.password || saved.password) : undefined,
+        privateKey: input.auth === 'key' ? (newKey ?? saved.key) : undefined,
+        // A newly pasted key never inherits the passphrase of the saved one.
+        passphrase: input.auth === 'key' ? (input.passphrase || (newKey ? undefined : saved.passphrase)) : undefined,
+      };
+      if (input.auth === 'password' && !target.password) { throw new Error('Enter the password.'); }
+      if (input.auth === 'key' && !target.privateKey) { throw new Error('Paste the private key.'); }
+      const text = await this.hub.remote.test(target);
+      this.post({ type: 'serverTest', ok: true, text: text || `Connected to ${input.user}@${input.host}.` });
+    } catch (e: any) { this.post({ type: 'serverTest', ok: false, text: e?.message ?? String(e) }); }
   }
 
   private async onMessage(m: any): Promise<void> {
@@ -81,82 +147,19 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
         void this.view?.webview.postMessage({ type: 'verifyResult', ...r });
         break;
       }
-      case 'addServer': {
-        const name = String(m.name);
-        const command = String(m.command);
-        const args = Array.isArray(m.args) ? m.args : m.args ? [m.args] : [];
-        const env = m.env && typeof m.env === 'object' ? m.env : {};
-        await hub.addServer(name, command, args, env);
-        this.refresh();
-        break;
-      }
-      case 'updateServer': {
-        const idx = Number(m.idx);
-        const name = String(m.name);
-        const command = String(m.command);
-        const args = Array.isArray(m.args) ? m.args : m.args ? [m.args] : [];
-        const env = m.env && typeof m.env === 'object' ? m.env : {};
-        await hub.updateServer(idx, name, command, args, env);
-        this.refresh();
-        break;
-      }
+      case 'saveServer': await this.saveServer(m); break;
+      case 'testServer': await this.testServer(m); break;
       case 'deleteServer': {
-        const idx = Number(m.idx);
-        const servers = await hub.getServerList();
-        if (idx >= 0 && idx < servers.length) {
-          await hub.deleteServer(idx);
-          this.refresh();
-        }
+        const kind = m.kind === 'linux' ? 'linux' : 'mcp', name = String(m.name ?? '');
+        const ok = await vscode.window.showWarningMessage(`Delete the ${kind === 'linux' ? 'Linux' : 'MCP'} server "${name}"${kind === 'linux' ? ' and its stored credentials' : ''}?`, { modal: true }, 'Delete');
+        if (ok === 'Delete') { await hub.servers.remove(kind, name); this.refresh(); }
         break;
       }
       case 'cloneServer': {
-        const idx = Number(m.idx);
-        const newName = String(m.newName);
-        await hub.cloneServer(idx, newName);
-        this.refresh();
-        break;
-      }
-      case 'addLinuxServer': {
-        const name = String(m.name);
-        const host = String(m.host);
-        const port = Number(m.port) || 22;
-        const user = String(m.user);
-        const auth = String(m.auth);
-        const password = m.password;
-        const key = m.key;
-        const env = m.env && typeof m.env === 'object' ? m.env : {};
-        await hub.addLinuxServer(name, host, port, user, auth, password, key, env);
-        this.refresh();
-        break;
-      }
-      case 'updateLinuxServer': {
-        const idx = Number(m.idx);
-        const name = String(m.name);
-        const host = String(m.host);
-        const port = Number(m.port) || 22;
-        const user = String(m.user);
-        const auth = String(m.auth);
-        const password = m.password;
-        const key = m.key;
-        const env = m.env && typeof m.env === 'object' ? m.env : {};
-        await hub.updateLinuxServer(idx, name, host, port, user, auth, password, key, env);
-        this.refresh();
-        break;
-      }
-      case 'deleteLinuxServer': {
-        const idx = Number(m.idx);
-        const servers = await hub.getLinuxServerList();
-        if (idx >= 0 && idx < servers.length) {
-          await hub.deleteLinuxServer(idx);
-          this.refresh();
-        }
-        break;
-      }
-      case 'cloneLinuxServer': {
-        const idx = Number(m.idx);
-        const newName = String(m.newName);
-        await hub.cloneLinuxServer(idx, newName);
-        this.refresh();
+        const kind = m.kind === 'linux' ? 'linux' : 'mcp', name = String(m.name ?? '');
+        const newName = await vscode.window.showInputBox({ prompt: `Name for the copy of "${name}"`, value: `${name}-copy`, validateInput: (x) => (/^[A-Za-z0-9][w.-]{0,63}$/.test(x) ? undefined : 'Use letters, digits, dots, dashes or underscores.') });
+        if (!newName) { break; }
+        try { await hub.servers.clone(kind, name, newName); this.refresh(); } catch (e: any) { void vscode.window.showErrorMessage(e.message ?? String(e)); }
         break;
       }
     }

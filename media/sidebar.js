@@ -143,366 +143,119 @@
   $('skNewSide').onclick = () => post({ type: 'manageSkills', view: 'new' });
   $('skManageSide').onclick = () => post({ type: 'manageSkills' });
 
-  /* ---------- servers ---------- */
-  let editingServerIdx = -1;
-  let envVars = [];
-  let editingLinuxServerIdx = -1;
-  let linuxEnvVars = [];
-
+  /* ---------- servers: MCP and Linux servers (credentials stay in the host's encrypted secret storage) ---------- */
+  let editing = null;   // { kind, name } while an existing server is being edited
+  let testing = false;  // true while a "Test connection" request is in flight
+  const quoteArg = (a) => (/[\s"']/.test(a) || !a ? `"${a.replace(/"/g, '\\"')}"` : a);
   function renderServerList() {
-    const mcpServers = data.mcpServers || [];
-    const linuxServers = data.linuxServers || [];
+    const mcp = data.mcpServers || [], linux = data.linuxServers || [];
     const box = $('serverList');
-    
-    let html = '';
-    
-    // MCP Servers section
-    if (mcpServers.length) {
-      html += '<div class="server-section"><h4>MCP Servers</h4>';
-      html += mcpServers.map((s, idx) => `
-        <div class="server-row" data-idx="${idx}" data-type="mcp">
-          <div class="server-header">
-            <span class="server-name">${esc(s.name)}</span>
-            <span class="tag ${s.status || 'connected'}">${s.status || 'connected'}</span>
-          </div>
-          <div class="server-details">
-            <div class="kv"><span>Command</span><b>${esc(s.command)}</b></div>
-            ${s.args && s.args.length ? `<div class="kv"><span>Args</span><b>${esc(s.args.join(' '))}</b></div>` : ''}
-            ${s.env ? renderEnvVars(s.env) : ''}
-          </div>
-          <div class="server-actions">
-            <button class="icon-btn" data-edit="${idx}" data-type="mcp" title="Edit">${EDIT}</button>
-            <button class="icon-btn" data-clone="${idx}" data-type="mcp" title="Clone">${CLONE}</button>
-            <button class="icon-btn" data-delete="${idx}" data-type="mcp" title="Delete">${DELETE}</button>
-          </div>
-        </div>
-      `).join('');
-      html += '</div>';
-    }
-    
-    // Linux Servers section
-    if (linuxServers.length) {
-      html += '<div class="server-section"><h4>Linux Servers</h4>';
-      html += linuxServers.map((s, idx) => `
-        <div class="server-row" data-idx="${idx}" data-type="linux">
-          <div class="server-header">
-            <span class="server-name">${esc(s.name)}</span>
-            <span class="tag ${s.status || 'connected'}">${s.status || 'connected'}</span>
-          </div>
-          <div class="server-details">
-            <div class="kv"><span>Host</span><b>${esc(s.host)}:${s.port}</b></div>
-            <div class="kv"><span>User</span><b>${esc(s.user)}</b></div>
-            <div class="kv"><span>Auth</span><b>${s.auth === 'password' ? 'Password' : 'SSH Key'}</b></div>
-            ${s.env ? renderEnvVars(s.env) : ''}
-          </div>
-          <div class="server-actions">
-            <button class="icon-btn" data-edit="${idx}" data-type="linux" title="Edit">${EDIT}</button>
-            <button class="icon-btn" data-clone="${idx}" data-type="linux" title="Clone">${CLONE}</button>
-            <button class="icon-btn" data-delete="${idx}" data-type="linux" title="Delete">${DELETE}</button>
-          </div>
-        </div>
-      `).join('');
-      html += '</div>';
-    }
-    
-    if (!html) {
-      box.innerHTML = '<div class="muted small">No servers configured. Click "Add Server" to configure servers with secure credentials.</div>';
-      return;
-    }
-    
-    box.innerHTML = html;
+    if (!mcp.length && !linux.length) { box.innerHTML = '<div class="muted small">No servers yet. MCP servers give the agent extra tools; Linux servers keep SSH details and credentials in one safe place.</div>'; return; }
+    const acts = (editable) => `<span class="sv-acts">${editable ? '<button class="icon-btn" data-sv="edit" title="Edit">✎</button>' : '<span class="tchip alt" title="Defined in the workspace settings">workspace</span>'}<button class="icon-btn" data-sv="clone" title="Duplicate">⧉</button>${editable ? '<button class="icon-btn" data-sv="delete" title="Delete">🗑</button>' : ''}</span>`;
+    const envChips = (keys) => (keys.length ? `<div class="sv-env">${keys.map((key) => `<span class="tchip alt">${esc(key)}</span>`).join(' ')}</div>` : '');
+    const cmd = (s) => [s.command, ...s.args].map(quoteArg).join(' ');
+    const noteLine = (notes) => { const first = String(notes || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean); return first ? `<div class="sv-note" title="${esc(notes)}">${esc(first)}</div>` : ''; };
+    box.innerHTML = (mcp.length ? `<h4 class="sv-head">MCP servers</h4>${mcp.map((s) => `<div class="sv-row2" data-kind="mcp" data-name="${esc(s.name)}">
+        <div class="sv-top"><span class="sv-name">${esc(s.name)}</span>${s.status ? `<span class="tag ${esc(s.status)}">${esc(s.status)}</span>` : ''}${acts(s.editable)}</div>
+        <div class="sv-detail" title="${esc(cmd(s))}">${esc(cmd(s))}</div>${envChips(Object.keys(s.env || {}))}</div>`).join('')}` : '')
+      + (linux.length ? `<h4 class="sv-head">Linux servers</h4>${linux.map((s) => `<div class="sv-row2" data-kind="linux" data-name="${esc(s.name)}">
+        <div class="sv-top"><span class="sv-name">${esc(s.name)}</span>${s.connected ? '<span class="tag sv-conn" title="The agent has an open SSH connection to this server">connected</span>' : ''}${s.hasCredential ? '' : '<span class="tag error" title="Edit the server to add its credential">no credential</span>'}${acts(true)}</div>
+        <div class="sv-detail">${esc(s.user)}@${esc(s.host)}:${Number(s.port)} · ${s.auth === 'key' ? 'SSH key' : 'password'}</div>${noteLine(s.notes)}${envChips(s.envKeys || [])}</div>`).join('')}` : '');
   }
-
-  function renderEnvVars(env) {
-    if (!env || !Object.keys(env).length) return '<div class="kv"><span>Environment</span><b class="muted">none</b></div>';
-    return `<div class="kv env-vars"><span>Environment</span><div class="env-list">${Object.entries(env).map(([k, v]) => {
-      const isSecret = /password|token|api[_-]?key|secret/i.test(k);
-      const masked = isSecret ? '••••••••' : esc(v);
-      return `<div class="env-item">
-        <span class="env-key">${esc(k)}</span>
-        <span class="env-value">${masked}</span>
-        ${isSecret ? `<button class="icon-btn toggle-secret" title="Show/Hide">${EYE}</button>` : ''}
-      </div>`;
-    }).join('')}</div></div>`;
-  }
-
   $('serverList').addEventListener('click', (e) => {
-    const btn = e.target.closest('button');
-    if (!btn) return;
-    
-    const type = btn.dataset.type || 'mcp';
-    const idx = Number(btn.dataset.edit || btn.dataset.clone || btn.dataset.delete);
-    
-    if (btn.dataset.add) {
-      openServerDialog();
-    } else if (btn.dataset.edit !== undefined) {
-      openServerDialog(idx, type);
-    } else if (btn.dataset.clone !== undefined) {
-      cloneServer(idx, type);
-    } else if (btn.dataset.delete !== undefined) {
-      if (confirm(`Delete server "${(type === 'linux' ? data.linuxServers : data.mcpServers)?.[idx]?.name}"?`)) {
-        post({ type: type === 'linux' ? 'deleteLinuxServer' : 'deleteServer', idx });
-      }
-    } else if (btn.classList.contains('toggle-secret')) {
-      const item = btn.closest('.env-item');
-      const valueEl = item.querySelector('.env-value');
-      const current = valueEl.textContent;
-      if (current === '••••••••') {
-        const key = item.querySelector('.env-key').textContent;
-        const serverIdx = item.closest('.server-row').dataset.idx;
-        const server = (type === 'linux' ? data.linuxServers : data.mcpServers)?.[serverIdx];
-        if (server && server.env && server.env[key]) {
-          valueEl.textContent = server.env[key];
-          btn.innerHTML = EYE_OFF;
-        }
-      } else {
-        valueEl.textContent = '••••••••';
-        btn.innerHTML = EYE;
-      }
-    }
+    const b = e.target.closest('[data-sv]'); if (!b) { return; }
+    const row = b.closest('.sv-row2'), kind = row.dataset.kind, name = row.dataset.name;
+    if (b.dataset.sv === 'edit') { openServerDialog(kind, name); } else { post({ type: b.dataset.sv === 'clone' ? 'cloneServer' : 'deleteServer', kind, name }); }
   });
 
+  const envRow = (key, value, keep) => `<div class="env-row"><input class="env-k" placeholder="NAME" value="${esc(key)}" spellcheck="false"><input class="env-v" type="password" placeholder="${keep ? 'unchanged' : 'value'}" value="${esc(value)}" autocomplete="off"><button class="icon-btn env-x" title="Remove">✕</button></div>`;
+  function showKind() {
+    const linux = $('serverKind').value === 'linux', key = $('serverAuth').value === 'key';
+    $('linuxFields').hidden = !linux; $('mcpFields').hidden = linux;
+    $('keyGroup').hidden = !key; $('passwordGroup').hidden = key;
+    $('serverTestBtn').hidden = !linux;
+    if (!linux) { setTestLine('', ''); }
+  }
+  function setTestLine(text, state) {
+    const el = $('serverTest');
+    el.textContent = text; el.className = `sv-test small${state ? ` ${state}` : ''}`;
+  }
+  function openServerDialog(kind, name) {
+    const mcp = kind === 'mcp' && name ? (data.mcpServers || []).find((s) => s.name === name) : undefined;
+    const linux = kind === 'linux' && name ? (data.linuxServers || []).find((s) => s.name === name) : undefined;
+    editing = name ? { kind, name } : null;
+    $('dialogTitle').textContent = name ? `Edit ${name}` : 'Add server';
+    $('serverKind').value = kind || 'linux'; $('serverKind').disabled = !!name;
+    $('serverName').value = name || '';
+    $('serverCommand').value = mcp ? [mcp.command, ...mcp.args].map(quoteArg).join(' ') : '';
+    $('serverHost').value = linux ? linux.host : ''; $('serverPort').value = linux ? linux.port : 22; $('serverUser').value = linux ? linux.user : '';
+    $('serverAuth').value = linux ? linux.auth : 'password';
+    $('serverPassword').value = ''; $('serverKey').value = ''; $('serverPassphrase').value = '';
+    $('serverPassphrase').placeholder = linux ? 'Leave empty to keep the saved passphrase' : '';
+    $('serverNotes').value = linux ? (linux.notes || '') : '';
+    $('serverAlwaysAsk').checked = linux ? linux.alwaysAsk !== false : true;
+    testing = false; $('serverTestBtn').disabled = false; setTestLine('', '');
+    $('serverPassword').placeholder = linux ? 'Leave empty to keep the saved password' : '';
+    $('serverKey').placeholder = linux ? 'Leave empty to keep the saved key' : '-----BEGIN OPENSSH PRIVATE KEY-----';
+    // Linux environment values are secret: only their names come back, and an empty value keeps the saved one.
+    $('envList').innerHTML = mcp ? Object.entries(mcp.env || {}).map(([key, v]) => envRow(key, v, false)).join('') : linux ? (linux.envKeys || []).map((key) => envRow(key, '', true)).join('') : '';
+    $('serverErr').textContent = ''; $('dialogSave').disabled = false;
+    showKind();
+    $('serverDialog').hidden = false;
+    $('serverName').focus();
+  }
+  const closeServerDialog = () => { $('serverDialog').hidden = true; editing = null; testing = false; };
   $('addServerBtn').onclick = () => openServerDialog();
-
-  /* ---------- server dialog ---------- */
-  function openServerDialog(idx = -1, type = 'mcp') {
-    editingServerIdx = idx;
-    const dialog = $('serverDialog');
-    const title = $('dialogTitle');
-    const nameInput = $('serverName');
-    const hostInput = $('serverHost');
-    const portInput = $('serverPort');
-    const userInput = $('serverUser');
-    const authSelect = $('serverAuth');
-    const passwordGroup = $('passwordGroup');
-    const keyGroup = $('keyGroup');
-    const passwordInput = $('serverPassword');
-    const keyInput = $('serverKey');
-    const envList = $('envList');
-    
-    // Reset env vars
-    envVars = [];
-    linuxEnvVars = [];
-    envList.innerHTML = '';
-    
-    // Show password group by default
-    passwordGroup.style.display = 'block';
-    keyGroup.style.display = 'none';
-    
-    if (type === 'linux') {
-      title.textContent = idx >= 0 ? 'Edit Linux Server' : 'Add Linux Server';
-      
-      if (idx >= 0 && data.linuxServers[idx]) {
-        const server = data.linuxServers[idx];
-        nameInput.value = server.name;
-        hostInput.value = server.host || '';
-        portInput.value = server.port || '22';
-        userInput.value = server.user || '';
-        authSelect.value = server.auth || 'password';
-        
-        // Toggle auth type
-        if (server.auth === 'key') {
-          passwordGroup.style.display = 'none';
-          keyGroup.style.display = 'block';
-          keyInput.value = server.key || '';
-        } else {
-          passwordGroup.style.display = 'block';
-          keyGroup.style.display = 'none';
-          passwordInput.value = '';
-        }
-        
-        envVars = server.env ? Object.entries(server.env) : [];
-      } else {
-        nameInput.value = '';
-        hostInput.value = '';
-        portInput.value = '22';
-        userInput.value = '';
-        authSelect.value = 'password';
-        passwordInput.value = '';
-        keyInput.value = '';
-      }
-    } else {
-      // MCP server
-      title.textContent = idx >= 0 ? 'Edit MCP Server' : 'Add MCP Server';
-      
-      if (idx >= 0 && data.mcpServers[idx]) {
-        const server = data.mcpServers[idx];
-        nameInput.value = server.name;
-        hostInput.value = '';
-        portInput.value = '';
-        userInput.value = '';
-        authSelect.value = 'password';
-        passwordGroup.style.display = 'none';
-        keyGroup.style.display = 'none';
-        
-        cmdInput.value = server.command + (server.args?.length ? ' ' + server.args.join(' ') : '');
-        envVars = server.env ? Object.entries(server.env) : [];
-      } else {
-        nameInput.value = '';
-        hostInput.value = '';
-        portInput.value = '';
-        userInput.value = '';
-        authSelect.value = 'password';
-        passwordInput.value = '';
-        keyInput.value = '';
-        cmdInput.value = '';
-      }
+  $('serverKind').onchange = showKind;
+  $('serverAuth').onchange = showKind;
+  $('addEnvBtn').onclick = () => { $('envList').insertAdjacentHTML('beforeend', envRow('', '', false)); $('envList').lastElementChild.querySelector('.env-k').focus(); };
+  $('envList').addEventListener('click', (e) => { const x = e.target.closest('.env-x'); if (x) { x.closest('.env-row').remove(); } });
+  $('dialogClose').onclick = closeServerDialog;
+  $('dialogCancel').onclick = closeServerDialog;
+  $('serverDialog').addEventListener('mousedown', (e) => { if (e.target === $('serverDialog')) { closeServerDialog(); } });
+  $('serverDialog').addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeServerDialog(); } });
+  /** The dialog's fields as a saveServer / testServer message. */
+  function serverForm(type) {
+    const kind = $('serverKind').value;
+    const env = [...document.querySelectorAll('#envList .env-row')].map((r) => [r.querySelector('.env-k').value.trim(), r.querySelector('.env-v').value]).filter(([key]) => key);
+    const msg = { type, kind, original: editing ? editing.name : '', name: $('serverName').value.trim(), env };
+    if (kind === 'mcp') { msg.commandLine = $('serverCommand').value; }
+    else {
+      const key = $('serverAuth').value === 'key';
+      Object.assign(msg, {
+        host: $('serverHost').value.trim(), port: Number($('serverPort').value), user: $('serverUser').value.trim(), auth: $('serverAuth').value,
+        password: key ? '' : $('serverPassword').value, key: key ? $('serverKey').value : '', passphrase: key ? $('serverPassphrase').value : '',
+        notes: $('serverNotes').value, alwaysAsk: $('serverAlwaysAsk').checked,
+      });
     }
-    
-    renderEnvInputs();
-    dialog.hidden = false;
-    nameInput.focus();
+    return msg;
   }
-
-  // Handle authentication type change
-  $('serverAuth').onchange = function() {
-    const passwordGroup = $('passwordGroup');
-    const keyGroup = $('keyGroup');
-    if (this.value === 'key') {
-      passwordGroup.style.display = 'none';
-      keyGroup.style.display = 'block';
-    } else {
-      passwordGroup.style.display = 'block';
-      keyGroup.style.display = 'none';
-    }
-  };
-
-  function renderEnvInputs() {
-    const envList = $('envList');
-    envList.innerHTML = envVars.map(([key, value], idx) => `
-      <div class="env-input-row">
-        <input type="text" class="env-key-input" placeholder="Variable name" value="${esc(key)}">
-        <input type="password" class="env-value-input" placeholder="Value" value="${value}">
-        <button class="icon-btn env-remove" data-idx="${idx}" title="Remove">✕</button>
-      </div>
-    `).join('');
-  }
-
-  $('addEnvBtn').onclick = () => {
-    envVars.push(['', '']);
-    renderEnvInputs();
-  };
-
-  $('envList').addEventListener('click', (e) => {
-    const btn = e.target.closest('.env-remove');
-    if (btn) {
-      const idx = Number(btn.dataset.idx);
-      envVars.splice(idx, 1);
-      renderEnvInputs();
-    }
-  });
-
-  $('envList').addEventListener('input', (e) => {
-    const keyInput = e.target.closest('.env-key-input');
-    const valueInput = e.target.closest('.env-value-input');
-    if (keyInput || valueInput) {
-      const row = keyInput?.closest('.env-input-row') || valueInput?.closest('.env-input-row');
-      const idx = row?.querySelector('.env-key-input') ? envVars.findIndex(([k]) => k === row.querySelector('.env-key-input')?.value) : -1;
-      if (idx === -1) {
-        const key = keyInput?.value || '';
-        const value = valueInput?.value || '';
-        envVars.push([key, value]);
-      } else {
-        envVars[idx] = [keyInput?.value || '', valueInput?.value || ''];
-      }
-    }
-  });
-
-  $('dialogClose').onclick = () => { $('serverDialog').hidden = true; };
-  $('dialogCancel').onclick = () => { $('serverDialog').hidden = true; };
-
   $('dialogSave').onclick = () => {
-    const name = $('serverName').value.trim();
-    const host = $('serverHost').value.trim();
-    const port = $('serverPort').value.trim() || '22';
-    const user = $('serverUser').value.trim();
-    const auth = $('serverAuth').value;
-    const password = $('serverPassword').value;
-    const key = $('serverKey').value;
-    const cmdInput = $('serverCommand');
-    
-    // Determine if this is a Linux or MCP server based on form fields
-    const isLinux = host && user;
-    
-    if (!name) {
-      alert('Server name is required');
-      return;
-    }
-
-    if (isLinux) {
-      if (!host || !user) {
-        alert('Host and username are required for Linux servers');
-        return;
-      }
-
-      if (auth === 'password' && !password) {
-        alert('Password is required for password authentication');
-        return;
-      }
-
-      if (auth === 'key' && !key) {
-        alert('SSH key is required for key authentication');
-        return;
-      }
-
-      const env: Record<string, string> = {};
-      envVars.forEach(([k, v]) => { if (k && v) env[k] = v; });
-
-      const serverData = {
-        name, host, port: parseInt(port), user, auth,
-        password: auth === 'password' ? password : undefined,
-        key: auth === 'key' ? key : undefined,
-        env
-      };
-
-      if (editingServerIdx >= 0) {
-        post({ type: 'updateLinuxServer', idx: editingServerIdx, ...serverData });
-      } else {
-        post({ type: 'addLinuxServer', ...serverData });
-      }
-    } else {
-      // MCP server
-      const fullCommand = cmdInput.value.trim();
-      if (!fullCommand) {
-        alert('Full command is required for MCP servers');
-        return;
-      }
-
-      const parts = fullCommand.split(/\s+/);
-      const command = parts[0];
-      const args = parts.slice(1);
-
-      const env: Record<string, string> = {};
-      envVars.forEach(([k, v]) => { if (k && v) env[k] = v; });
-
-      if (editingServerIdx >= 0) {
-        post({ type: 'updateServer', idx: editingServerIdx, name, command, args, env });
-      } else {
-        post({ type: 'addServer', name, command, args, env });
-      }
-    }
-    $('serverDialog').hidden = true;
+    $('serverErr').textContent = ''; $('dialogSave').disabled = true;
+    post(serverForm('saveServer'));
   };
-
-  $('serverDialog').addEventListener('click', (e) => {
-    if (e.target === $('serverDialog')) {
-      $('serverDialog').hidden = true;
-    }
-  });
-
-  function cloneServer(idx: number, type: string) {
-    const server = type === 'linux' ? data.linuxServers[idx] : data.mcpServers[idx];
-    if (!server) return;
-    const newName = prompt('New server name:', `${server.name}_copy`);
-    if (newName) {
-      post({ type: type === 'linux' ? 'cloneLinuxServer' : 'cloneServer', idx, newName });
-    }
+  $('serverTestBtn').onclick = () => {
+    if (testing || $('serverKind').value !== 'linux') { return; }
+    testing = true; $('serverTestBtn').disabled = true; $('serverErr').textContent = '';
+    setTestLine('Connecting…', 'busy');
+    post(serverForm('testServer'));
+  };
+  function onServerTest(m) {
+    if (!testing) { return; }   // the dialog was closed or reopened while the test ran
+    testing = false; $('serverTestBtn').disabled = false;
+    setTestLine(m.ok ? (m.text || 'Connected.') : (m.text || 'Could not connect.'), m.ok ? 'ok' : 'fail');
+  }
+  function onServerResult(m) {
+    if (m.ok) { closeServerDialog(); return; }
+    $('serverErr').textContent = m.error || 'Could not save the server.'; $('dialogSave').disabled = false;
   }
 
   window.addEventListener('message', ({ data: m }) => {
     if (m.type === 'data') { data = m; renderLlm(); renderSessions(); renderSkillList(); renderServerList(); }
     else if (m.type === 'verifying') { $('verify').innerHTML = '<div class="muted">Checking…</div>'; }
     else if (m.type === 'verifyResult') { renderVerify(m); }
+    else if (m.type === 'serverResult') { onServerResult(m); }
+    else if (m.type === 'serverTest') { onServerTest(m); }
   });
   setInterval(() => { if (data.sessions.some((s) => s.agents.some((a) => a.startedAt))) { renderSessions(); } }, 1000);
   post({ type: 'ready' });
