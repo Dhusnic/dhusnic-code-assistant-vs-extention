@@ -71,49 +71,21 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
         void this.view?.webview.postMessage({ type: 'verifyResult', ...r });
         break;
       }
-      case 'getServers': {
-        const servers = await hub.getServerList();
-        void this.view?.webview.postMessage({ type: 'serverList', servers });
-        break;
-      }
       case 'addServer': {
-        const name = await vscode.window.showInputBox({ prompt: 'Server name' });
-        if (!name) break;
-        const command = await vscode.window.showInputBox({ prompt: 'Command (e.g., npx)' });
-        if (!command) break;
-        const argsInput = await vscode.window.showInputBox({ prompt: 'Arguments (space-separated, optional)' });
-        const args = argsInput ? argsInput.trim().split(/\s+/) : [];
-        const env: Record<string, string> = {};
-        let addEnv = true;
-        while (addEnv) {
-          const key = await vscode.window.showInputBox({ prompt: 'Environment variable name (or Cancel to finish)' });
-          if (!key) { addEnv = false; break; }
-          const value = await vscode.window.showInputBox({ prompt: `Value for ${key} (or Cancel to skip)`, password: true });
-          if (value !== undefined) { env[key] = value; }
-        }
+        const name = String(m.name);
+        const command = String(m.command);
+        const args = Array.isArray(m.args) ? m.args : m.args ? [m.args] : [];
+        const env = m.env && typeof m.env === 'object' ? m.env : {};
         await hub.addServer(name, command, args, env);
         this.refresh();
         break;
       }
-      case 'editServer': {
+      case 'updateServer': {
         const idx = Number(m.idx);
-        const servers = await hub.getServerList();
-        if (idx < 0 || idx >= servers.length) break;
-        const server = servers[idx];
-        const name = await vscode.window.showInputBox({ prompt: 'Server name', value: server.name });
-        if (!name) break;
-        const command = await vscode.window.showInputBox({ prompt: 'Command', value: server.command });
-        if (!command) break;
-        const argsInput = await vscode.window.showInputBox({ prompt: 'Arguments', value: server.args?.join(' ') ?? '' });
-        const args = argsInput ? argsInput.trim().split(/\s+/) : [];
-        const env: Record<string, string> = { ...server.env };
-        let addEnv = true;
-        while (addEnv) {
-          const key = await vscode.window.showInputBox({ prompt: 'Environment variable name (or Cancel to finish)' });
-          if (!key) { addEnv = false; break; }
-          const value = await vscode.window.showInputBox({ prompt: `Value for ${key}`, password: true });
-          if (value !== undefined) { env[key] = value; }
-        }
+        const name = String(m.name);
+        const command = String(m.command);
+        const args = Array.isArray(m.args) ? m.args : m.args ? [m.args] : [];
+        const env = m.env && typeof m.env === 'object' ? m.env : {};
         await hub.updateServer(idx, name, command, args, env);
         this.refresh();
         break;
@@ -129,11 +101,7 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
       }
       case 'cloneServer': {
         const idx = Number(m.idx);
-        const servers = await hub.getServerList();
-        if (idx < 0 || idx >= servers.length) break;
-        const server = servers[idx];
-        const newName = await vscode.window.showInputBox({ prompt: 'New server name', value: `${server.name}_copy` });
-        if (!newName) break;
+        const newName = String(m.newName);
         await hub.cloneServer(idx, newName);
         this.refresh();
         break;

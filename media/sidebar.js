@@ -144,6 +144,9 @@
   $('skManageSide').onclick = () => post({ type: 'manageSkills' });
 
   /* ---------- servers ---------- */
+  let editingServerIdx = -1;
+  let envVars = [];
+
   function renderServerList() {
     const servers = data.servers || [];
     const box = $('serverList');
@@ -189,11 +192,11 @@
     if (!btn) return;
     
     if (btn.dataset.add) {
-      post({ type: 'addServer' });
+      openServerDialog();
     } else if (btn.dataset.edit) {
-      post({ type: 'editServer', idx: Number(btn.dataset.edit) });
+      openServerDialog(Number(btn.dataset.edit));
     } else if (btn.dataset.clone) {
-      post({ type: 'cloneServer', idx: Number(btn.dataset.clone) });
+      cloneServer(Number(btn.dataset.clone));
     } else if (btn.dataset.delete) {
       const idx = Number(btn.dataset.delete);
       if (confirm(`Delete server "${data.servers[idx]?.name}"?`)) {
@@ -218,7 +221,119 @@
     }
   });
 
-  $('addServerBtn').onclick = () => post({ type: 'addServer' });
+  $('addServerBtn').onclick = () => openServerDialog();
+
+  /* ---------- server dialog ---------- */
+  function openServerDialog(idx = -1) {
+    editingServerIdx = idx;
+    const dialog = $('serverDialog');
+    const title = $('dialogTitle');
+    const nameInput = $('serverName');
+    const cmdInput = $('serverCommand');
+    const argsInput = $('serverArgs');
+    const envList = $('envList');
+    
+    envVars = [];
+    envList.innerHTML = '';
+    
+    if (idx >= 0 && data.servers[idx]) {
+      const server = data.servers[idx];
+      title.textContent = 'Edit Server';
+      nameInput.value = server.name;
+      cmdInput.value = server.command;
+      argsInput.value = server.args?.join(' ') ?? '';
+      envVars = server.env ? Object.entries(server.env) : [];
+      renderEnvInputs();
+    } else {
+      title.textContent = 'Add Server';
+      nameInput.value = '';
+      cmdInput.value = '';
+      argsInput.value = '';
+    }
+    
+    dialog.hidden = false;
+    nameInput.focus();
+  }
+
+  function renderEnvInputs() {
+    const envList = $('envList');
+    envList.innerHTML = envVars.map(([key, value], idx) => `
+      <div class="env-input-row">
+        <input type="text" class="env-key-input" placeholder="Variable name" value="${esc(key)}">
+        <input type="password" class="env-value-input" placeholder="Value" value="${value}">
+        <button class="icon-btn env-remove" data-idx="${idx}" title="Remove">✕</button>
+      </div>
+    `).join('');
+  }
+
+  $('addEnvBtn').onclick = () => {
+    envVars.push(['', '']);
+    renderEnvInputs();
+  };
+
+  $('envList').addEventListener('click', (e) => {
+    const btn = e.target.closest('.env-remove');
+    if (btn) {
+      const idx = Number(btn.dataset.idx);
+      envVars.splice(idx, 1);
+      renderEnvInputs();
+    }
+  });
+
+  $('envList').addEventListener('input', (e) => {
+    const keyInput = e.target.closest('.env-key-input');
+    const valueInput = e.target.closest('.env-value-input');
+    if (keyInput || valueInput) {
+      const row = keyInput?.closest('.env-input-row') || valueInput?.closest('.env-input-row');
+      const idx = row?.querySelector('.env-key-input') ? envVars.findIndex(([k]) => k === row.querySelector('.env-key-input')?.value) : -1;
+      if (idx === -1) {
+        const key = keyInput?.value || '';
+        const value = valueInput?.value || '';
+        envVars.push([key, value]);
+      } else {
+        envVars[idx] = [keyInput?.value || '', valueInput?.value || ''];
+      }
+    }
+  });
+
+  $('dialogClose').onclick = () => { $('serverDialog').hidden = true; };
+  $('dialogCancel').onclick = () => { $('serverDialog').hidden = true; };
+
+  $('dialogSave').onclick = () => {
+    const name = $('serverName').value.trim();
+    const command = $('serverCommand').value.trim();
+    const args = $('serverArgs').value.trim().split(/\s+/).filter(Boolean);
+    
+    if (!name || !command) {
+      alert('Server name and command are required');
+      return;
+    }
+
+    const env: Record<string, string> = {};
+    envVars.forEach(([k, v]) => { if (k && v) env[k] = v; });
+
+    if (editingServerIdx >= 0) {
+      post({ type: 'updateServer', idx: editingServerIdx, name, command, args, env });
+    } else {
+      post({ type: 'addServer', name, command, args, env });
+    }
+    $('serverDialog').hidden = true;
+  };
+
+  $('serverDialog').addEventListener('click', (e) => {
+    if (e.target === $('serverDialog')) {
+      $('serverDialog').hidden = true;
+    }
+  });
+
+  function cloneServer(idx: number) {
+    const server = data.servers[idx];
+    if (!server) return;
+    const newName = prompt('New server name:', `${server.name}_copy`);
+    if (newName) {
+      post({ type: 'cloneServer', idx, newName });
+    }
+  }
 
   window.addEventListener('message', ({ data: m }) => {
     if (m.type === 'data') { data = m; renderLlm(); renderSessions(); renderSkillList(); renderServerList(); }

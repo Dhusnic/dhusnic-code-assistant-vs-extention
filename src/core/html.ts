@@ -97,6 +97,39 @@ export function buildSidebarHtml(p: HtmlParts): string {
 <section id="storeSec" class="sec"><h3 class="sec-h" data-sec="storeSec">Storage</h3><div class="sec-b">
   <p class="muted">Checks that every saved session can be read back, repairs what it can, and runs a write → read → compare self-test.</p>
   <button class="btn sec-btn" id="verifyBtn">Check storage</button><div id="verify"></div></div></section>
+
+<!-- Server Dialog -->
+<div id="serverDialog" class="dialog-overlay" hidden>
+  <div class="dialog-content">
+    <div class="dialog-header">
+      <h3 id="dialogTitle">Add Server</h3>
+      <button class="icon-btn dialog-close" id="dialogClose">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="form-group">
+        <label for="serverName">Server Name</label>
+        <input type="text" id="serverName" placeholder="e.g., github, openai" required>
+      </div>
+      <div class="form-group">
+        <label for="serverCommand">Command</label>
+        <input type="text" id="serverCommand" placeholder="e.g., npx" required>
+      </div>
+      <div class="form-group">
+        <label for="serverArgs">Arguments (optional)</label>
+        <input type="text" id="serverArgs" placeholder="e.g., -y @modelcontextprotocol/server-github">
+      </div>
+      <div class="form-group">
+        <label>Environment Variables</label>
+        <div id="envList"></div>
+        <button class="btn small" id="addEnvBtn">＋ Add Variable</button>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button class="btn" id="dialogCancel">Cancel</button>
+      <button class="btn primary" id="dialogSave">Save Server</button>
+    </div>
+  </div>
+</div>
 ${scripts({ ...p, mermaidUri: undefined })}
 </body></html>`;
 }
