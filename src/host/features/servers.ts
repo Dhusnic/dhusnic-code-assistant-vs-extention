@@ -8,13 +8,13 @@ import * as vscode from 'vscode';
 
 export type ServerKind = 'mcp' | 'linux';
 export interface McpServerView { name: string; command: string; args: string[]; env: Record<string, string>; status?: string; editable: boolean }
-export interface LinuxServer { name: string; host: string; port: number; user: string; auth: 'password' | 'key'; envKeys: string[]; notes?: string; alwaysAsk?: boolean }
+export interface LinuxServer { name: string; host: string; port: number; user: string; auth: 'password' | 'key'; envKeys: string[]; notes?: string }
 export interface LinuxServerView extends LinuxServer { hasCredential: boolean; connected?: boolean }
 export interface LinuxSecret { password?: string; key?: string; passphrase?: string; env?: Record<string, string> }
 
 export interface McpInput { name: string; commandLine: string; env: Record<string, string> }
 /** For an existing server, an empty password, key or environment value keeps the stored one. */
-export interface LinuxInput { name: string; host: string; port: number; user: string; auth: 'password' | 'key'; password?: string; key?: string; passphrase?: string; env: Record<string, string>; notes?: string; alwaysAsk?: boolean }
+export interface LinuxInput { name: string; host: string; port: number; user: string; auth: 'password' | 'key'; password?: string; key?: string; passphrase?: string; env: Record<string, string>; notes?: string }
 
 const STATE_KEY = 'linuxServers';
 /** MCP names become part of tool names, so they stay strict. Linux server names are labels and may contain spaces. */
@@ -95,17 +95,6 @@ export class ServerRegistry {
     private mcpStatus: (name: string) => string | undefined,
   ) {}
 
-  /**
-   * "Ask before every change" used to be on for every new server and overrode Auto-execute. It is now an opt-in for
-   * production servers, so servers saved with the old default are switched off once.
-   */
-  async migrateAskDefault(): Promise<void> {
-    if (this.ctx.globalState.get<boolean>('serverAskIsOptIn')) { return; }
-    const list = this.linux();
-    if (list.some((s) => s.alwaysAsk !== false)) { await this.saveLinuxList(list.map((s) => ({ ...s, alwaysAsk: false }))); }
-    await this.ctx.globalState.update('serverAskIsOptIn', true);
-  }
-
   private get cfg() { return vscode.workspace.getConfiguration('infraonAssistant'); }
   /** Only user-level entries are written; configuration values are read-only, so they are always copied first. */
   private userMcp(): Record<string, any> { return JSON.parse(JSON.stringify(this.cfg.inspect<Record<string, any>>('mcpServers')?.globalValue ?? {})); }
@@ -169,7 +158,7 @@ export class ServerRegistry {
     // Write the new secret before removing the old one, so a failure never loses the credential.
     await this.ctx.secrets.store(secretKey(input.name), JSON.stringify(secret));
     if (original && original !== input.name) { await this.ctx.secrets.delete(secretKey(original)); }
-    const entry: LinuxServer = { name: input.name, host: input.host, port: input.port, user: input.user, auth: input.auth, envKeys: Object.keys(env), notes: input.notes?.trim() || undefined, alwaysAsk: input.alwaysAsk === true };
+    const entry: LinuxServer = { name: input.name, host: input.host, port: input.port, user: input.user, auth: input.auth, envKeys: Object.keys(env), notes: input.notes?.trim() || undefined };
     await this.saveLinuxList([...list.filter((s) => s.name !== original && s.name !== input.name), entry]);
   }
 

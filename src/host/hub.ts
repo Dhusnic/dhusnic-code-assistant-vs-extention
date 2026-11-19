@@ -79,8 +79,6 @@ export class Hub {
     this.notifier = createNotifier({ openSession: (id) => this.openSession(id), isPanelVisible: (sid) => !!this.panels.get(sid)?.panel.visible });
     ctx.subscriptions.push(this.terminal, this.notifier);
     this.remote = new RemoteService({ ctx, servers: this.servers, addKnownSecret: (v, k) => this.safety.addKnownSecret(v, k), onStatus: () => this.scheduleRefresh() });
-    this.safety.remoteAlwaysAsk = (server) => this.remote.alwaysAsk(server);
-    void this.servers.migrateAskDefault();
     this.safety.remoteResolve = (server) => this.remote.resolveName(server);
     ctx.subscriptions.push(this.remote);
     // Saved server passwords are masked from the first message on, even before the agent connects.

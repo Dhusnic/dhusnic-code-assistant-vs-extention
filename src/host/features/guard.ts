@@ -10,7 +10,7 @@ import { HookConfig, HookEvent, hasHooks, mergeHooks, parseHooks, runHooks } fro
 import { LlmFn } from '../../core/llm';
 import { PermissionRule, evaluatePermission, loadPermissionSettings } from '../../core/permissions';
 import { requiresApproval } from '../../core/policy';
-import { REMOTE_CHANGING, catastrophicReason } from '../../core/remoteTools';
+import { catastrophicReason, isReadOnlyCommand } from '../../core/remoteTools';
 import { SecretVault, redactMessages } from '../../core/redact';
 
 const TRUST_KEY = 'trustedProjectSettings';
@@ -38,8 +38,6 @@ export class SafetyCenter {
   private declined = new Set<string>();
   private vaults = new Map<string, SecretVault>();
   private knownSecrets = new Map<string, string>();
-  /** Set by the hub: whether a server wants approval for every change. */
-  remoteAlwaysAsk?: (server: unknown) => boolean;
   /** Set by the hub: the saved name of a server given by name, IP or user@host. */
   remoteResolve?: (server: unknown) => string | undefined;
   private auditLog?: AuditLog;
@@ -154,18 +152,21 @@ export class SafetyCenter {
       if (local.effect === 'deny') { return { effect: 'deny', reason: local.rule?.raw ?? local.reason }; }
       if (!up && PROTECTED.test(String(req.args?.local_path ?? ''))) { return { effect: 'ask', reason: 'agent permission settings are protected' }; }
     }
-    if (req.tool === 'remote_exec' && d.effect !== 'allow') {
+    // Auto-execute runs everything without asking. The one exception, unless the user turned it off, is a command that
+    // could wreck the server and cannot be undone (reboot, formatting a disk, deleting system folders).
+    if (req.tool === 'remote_exec' && d.effect !== 'allow' && this.host.cfg.get<boolean>('confirmDangerousRemoteCommands', true)) {
       const danger = catastrophicReason(req.args?.command);
-      if (danger) { return { effect: 'ask', reason: `this command could ${danger}` }; }
+      if (danger) { return { effect: 'ask', reason: `this command could ${danger} (turn off "Confirm Dangerous Remote Commands" in settings to skip this)` }; }
     }
-    if (REMOTE_CHANGING.has(req.tool) && d.effect !== 'allow' && this.remoteAlwaysAsk?.(req.args?.server)) { return { effect: 'ask', reason: 'this server asks before every change' }; }
+    // Commands that only look at a server are as harmless as reading a file, so "Edit automatically" runs them too.
+    if (req.tool === 'remote_exec' && d.effect === undefined && req.mode === 'auto-edit' && isReadOnlyCommand(req.args?.command)) { return { effect: 'allow', reason: 'read-only command' }; }
     const target = String(req.args?.path ?? '');
     if ((req.kind === 'edit' && PROTECTED.test(target)) || (req.kind === 'exec' && PROTECTED_IN_COMMAND.test(String(req.args?.command ?? '')))) {
       return { effect: 'ask', reason: 'agent permission settings are protected' };
     }
     // A saved session may still be in auto mode after the policy turned that mode off.
     if (this.host.policy.disableAutoMode && req.mode === 'auto' && d.effect !== 'allow' && requiresApproval('auto-edit', req.kind)) { return { effect: 'ask', reason: 'auto mode is disabled by policy' }; }
-    return { effect: d.effect, reason: d.rule?.raw };
+    return { effect: d.effect, reason: d.rule ? `the permission rule "${d.rule.raw}" (${d.rule.source} settings) says so` : undefined };
   }
 
   guardFor(sid: string, aid: string, root: string, isSub: boolean): AgentGuard {

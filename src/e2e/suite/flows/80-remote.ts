@@ -12,7 +12,7 @@ const { startSshServer, findShell } = require(path.join(__dirname, '..', '..', '
 
 export const flows: Flow[] = [
   {
-    name: 'remote-command-asks-first-runs-over-ssh-and-masks-the-password',
+    name: 'auto-execute-never-asks-even-for-a-server-saved-to-ask-and-masks-the-password',
     timeoutMs: 60_000,
     async run(t) {
       if (!findShell()) { throw new Error('no bash found for the test SSH server'); }
@@ -26,15 +26,13 @@ export const flows: Flow[] = [
         await s.click('#modePill');
         await s.clickText('.menu .item', 'Auto-execute');
         await t.gw.script(
-          callTool('remote_exec', { server: '127.0.0.1', command: `echo "result-$((40+2))"; echo leaked:${PASSWORD}` }),
+          callTool('remote_exec', { server: '127.0.0.1', command: `mkdir -p e2e-made && echo "result-$((40+2))"; echo leaked:${PASSWORD}` }),
           reply('The server answered.'),
         );
         await s.send('Check the server');
-        // This server asks before every change, even in auto mode.
-        await s.waitFor('.approve:not(.done) .q', { text: 'Allow command?', timeoutMs: 15_000 });
-        await t.shot('remote-approval');
-        await s.clickText('.approve:not(.done) .actions button', 'Allow');
+        // Saved with the old "ask before every change" flag: Auto-execute still runs it without asking.
         await s.waitFor('.msg.assistant .md', { text: 'The server answered.', timeoutMs: 20_000 });
+        assert.equal(await s.count('.approve'), 0, 'Auto-execute never asks for an ordinary change');
         await s.waitFor('.tool.ok', { text: 'Remote 127.0.0.1' }); // found by IP: the agent may name a server by its address
 
         const result = String(lastOfRole(await t.gw.last(), 'tool')?.content);

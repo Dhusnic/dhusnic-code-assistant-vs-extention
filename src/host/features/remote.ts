@@ -94,7 +94,7 @@ export class RemoteService implements vscode.Disposable {
     return {
       pool: this.pool,
       target: (name) => this.target(name),
-      servers: (): RemoteServerInfo[] => this.deps.servers.linuxSync().map((s) => ({ name: s.name, host: s.host, port: s.port, user: s.user, auth: s.auth, notes: s.notes, alwaysAsk: s.alwaysAsk === true })),
+      servers: (): RemoteServerInfo[] => this.deps.servers.linuxSync().map((s) => ({ name: s.name, host: s.host, port: s.port, user: s.user, auth: s.auth, notes: s.notes })),
     };
   }
 
@@ -195,12 +195,6 @@ export class RemoteService implements vscode.Disposable {
 
   /** The saved name of the server a tool call refers to (by name, IP or user@host). */
   resolveName(server: unknown): string | undefined { return resolveServer(this.deps.servers.linuxSync(), server)?.name; }
-
-  /** Whether a remote tool call targets a server that wants approval for every change, even in Auto-execute. */
-  alwaysAsk(server: unknown): boolean {
-    const s = resolveServer(this.deps.servers.linuxSync(), server);
-    return s?.alwaysAsk === true;
-  }
 
   /** Connects with the given details and runs a harmless command. Used by "Test connection". */
   async test(t: SshTarget): Promise<string> {

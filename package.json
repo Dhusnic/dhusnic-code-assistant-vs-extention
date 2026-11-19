@@ -2,7 +2,7 @@
     "name": "infraon-code-assistant",
     "displayName": "Infraon Code Assistant",
     "description": "Agentic AI coding assistant powered by the company-hosted LLM",
-    "version": "0.20.0",
+    "version": "0.20.1",
     "publisher": "infraon",
     "engines": {
         "vscode": "^1.90.0"
@@ -326,6 +326,11 @@
                     "type": "string",
                     "default": "",
                     "description": "Optional URL of the central policy file. A policy installed on the machine takes priority."
+                },
+                "infraonAssistant.confirmDangerousRemoteCommands": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Ask before a remote command that could wreck a server (reboot or power off, formatting or repartitioning a disk, overwriting a disk with dd, recursively deleting or changing permissions of system folders), even in Auto-execute. Everything else runs without asking in Auto-execute."
                 }
             }
         },

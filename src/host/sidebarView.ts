@@ -69,7 +69,7 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
       name: String(m.name ?? '').trim(), host: String(m.host ?? '').trim(), port: Number(m.port), user: String(m.user ?? '').trim(),
       auth: m.auth === 'key' ? 'key' : 'password', password: m.password ? String(m.password) : undefined, key: m.key ? String(m.key) : undefined,
       passphrase: m.passphrase ? String(m.passphrase) : undefined, env,
-      notes: typeof m.notes === 'string' ? m.notes : undefined, alwaysAsk: m.alwaysAsk === true,
+      notes: typeof m.notes === 'string' ? m.notes : undefined,
     };
   }
 

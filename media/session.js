@@ -341,7 +341,8 @@
     const buttons = [['Allow', false, { type: 'approval', id: m.id, ok: true }]];
     if (m.kind === 'edit') { buttons.push(['Allow all edits', true, { type: 'approval', id: m.id, ok: true, setMode: 'auto-edit' }]); }
     buttons.push(['Deny', true, { type: 'approval', id: m.id, ok: false }]);
-    card(m, '', `Allow ${what}?`, m.diff ? diffHtml(m.diff) : `<pre>${esc(m.detail)}</pre>`, buttons);
+    const why = m.reason ? `<div class="ap-why">Asking because ${esc(m.reason)}.</div>` : '';
+    card(m, '', `Allow ${what}?`, `${why}${m.diff ? diffHtml(m.diff) : `<pre>${esc(m.detail)}</pre>`}`, buttons);
   }
   function planApproval(m) {
     card(m, 'plan', 'Proposed plan', `<div class="planbody">${md(m.plan)}</div>`, [

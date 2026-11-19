@@ -15,6 +15,8 @@ export interface ApprovalRequest {
   name: string;
   detail: string;
   preview?: ApprovalPreview;
+  /** Why approval is needed when it is not just the mode (a rule, a server setting, a dangerous command). */
+  reason?: string;
 }
 
 export interface AgentUi {
@@ -614,7 +616,7 @@ export class Agent {
       const ask = decision.effect === 'ask' || (decision.effect !== 'allow' && requiresApproval(opts.mode, tool.kind));
       if (ask) {
         guard?.onApproval?.(req, 'asked');
-        const ok = await raceAbort(this.approvals.run(async () => (signal.aborted ? false : ui.approve({ id, kind: tool.kind, name, detail, preview }))), signal);
+        const ok = await raceAbort(this.approvals.run(async () => (signal.aborted ? false : ui.approve({ id, kind: tool.kind, name, detail, preview, reason: decision.effect === 'ask' ? decision.reason : undefined }))), signal);
         guard?.onApproval?.(req, ok ? 'allowed' : 'denied');
         if (!ok) { return finish(false, 'DENIED by user.'); }
       }

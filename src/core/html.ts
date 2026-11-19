@@ -122,7 +122,6 @@ export function buildSidebarHtml(p: HtmlParts): string {
       <label for="serverNotes">Notes for the agent</label>
       <textarea id="serverNotes" class="sv-notes" rows="3" maxlength="4000" spellcheck="false" placeholder="App in /opt/app, service app.service, health check curl -fsS localhost:8080/health"></textarea>
       <div class="muted small">The agent reads these notes when it works on this server. Do not put secrets here.</div>
-      <label class="sv-check" for="serverAlwaysAsk"><input id="serverAlwaysAsk" type="checkbox"><span>Ask before every change, even in Auto-execute (for production servers)</span></label>
     </div>
     <label>Environment variables</label>
     <div id="envList"></div>

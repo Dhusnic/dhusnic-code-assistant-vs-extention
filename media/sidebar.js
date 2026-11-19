@@ -193,7 +193,6 @@
     $('serverPassword').value = ''; $('serverKey').value = ''; $('serverPassphrase').value = '';
     $('serverPassphrase').placeholder = linux ? 'Leave empty to keep the saved passphrase' : '';
     $('serverNotes').value = linux ? (linux.notes || '') : '';
-    $('serverAlwaysAsk').checked = !!(linux && linux.alwaysAsk === true);
     testing = false; $('serverTestBtn').disabled = false; setTestLine('', '');
     $('serverPassword').placeholder = linux ? 'Leave empty to keep the saved password' : '';
     $('serverKey').placeholder = linux ? 'Leave empty to keep the saved key' : '-----BEGIN OPENSSH PRIVATE KEY-----';
@@ -225,7 +224,7 @@
       Object.assign(msg, {
         host: $('serverHost').value.trim(), port: Number($('serverPort').value), user: $('serverUser').value.trim(), auth: $('serverAuth').value,
         password: key ? '' : $('serverPassword').value, key: key ? $('serverKey').value : '', passphrase: key ? $('serverPassphrase').value : '',
-        notes: $('serverNotes').value, alwaysAsk: $('serverAlwaysAsk').checked,
+        notes: $('serverNotes').value,
       });
     }
     return msg;

@@ -6,7 +6,7 @@ import { Tool, fnSpec } from './tool';
 
 /** The agent's tools for Linux servers: commands, long-running jobs, file transfer and reading remote files. */
 
-export interface RemoteServerInfo { name: string; host: string; port: number; user: string; auth: 'password' | 'key'; notes?: string; alwaysAsk: boolean }
+export interface RemoteServerInfo { name: string; host: string; port: number; user: string; auth: 'password' | 'key'; notes?: string }
 export interface RemoteHost {
   servers(): RemoteServerInfo[];
   /** Connection details including credentials; throws if the server does not exist. */
@@ -59,6 +59,110 @@ export function unknownServerMessage(servers: Array<{ name: string; host: string
     + 'Otherwise call connect_server with the address (and the user name if the user gave one): it asks the user for the credentials in a secure VS Code prompt, tests the connection and saves the server. Never ask the user to type a password or private key in the chat.';
 }
 
+/**
+ * Splits a shell command into simple commands and their words, honouring single and double quotes and backslash
+ * escapes, so a "|" or ";" inside quotes (grep 'a|b') is not mistaken for a pipe or a separator.
+ */
+export function shellCommands(text: string): Array<{ words: string[]; raw: string }> {
+  const out: Array<{ words: string[]; raw: string }> = [];
+  let words: string[] = [], word = '', inWord = false, raw = '', quote: string | undefined;
+  const endWord = () => { if (inWord) { words.push(word); } word = ''; inWord = false; };
+  const endCommand = () => { endWord(); if (words.length) { out.push({ words, raw: raw.trim() }); } words = []; raw = ''; };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      raw += c;
+      if (c === quote) { quote = undefined; }
+      else if (c === '\\' && quote === '"' && i + 1 < text.length) { word += text[++i]; raw += text[i]; }
+      else { word += c; }
+      continue;
+    }
+    if (c === "'" || c === '"') { quote = c; inWord = true; raw += c; continue; }
+    if (c === '\\' && i + 1 < text.length) { word += text[++i]; inWord = true; raw += c + text[i]; continue; }
+    if (c === ';' || c === '|' || c === '&' || c === '\n') {
+      // "2>&1" and ">&2" are redirections, not separators.
+      if (c === '&' && (text[i - 1] === '>' || text[i + 1] === '>')) { word += c; inWord = true; raw += c; continue; }
+      endCommand();
+      if ((c === '|' || c === '&') && text[i + 1] === c) { i++; }
+      continue;
+    }
+    if (/\s/.test(c)) { endWord(); raw += c; continue; }
+    word += c; inWord = true; raw += c;
+  }
+  endCommand();
+  return out;
+}
+
+/** Commands that only look at the server. Sub-commands are checked for the tools that also have changing ones. */
+const READ_ONLY = new Set(['ls', 'll', 'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'zgrep', 'zcat', 'stat', 'file', 'wc', 'du', 'df', 'free', 'uptime', 'uname',
+  'whoami', 'id', 'groups', 'hostname', 'hostnamectl', 'ps', 'pgrep', 'pidof', 'which', 'whereis', 'type', 'echo', 'printf', 'pwd', 'date', 'printenv', 'tree',
+  'lsblk', 'lscpu', 'lsmem', 'lsof', 'ss', 'netstat', 'nproc', 'vmstat', 'iostat', 'mpstat', 'sort', 'uniq', 'cut', 'tr', 'column', 'jq', 'md5sum', 'sha256sum',
+  'readlink', 'realpath', 'basename', 'dirname', 'test', '[', 'true', 'sleep', 'getent', 'dig', 'nslookup', 'host', 'ping', 'last', 'w', 'who', 'dmesg', 'awk', 'sed', 'find', 'journalctl', 'curl', 'wget', 'env', 'nginx', 'ip']);
+const READ_SUB: Record<string, Set<string>> = {
+  systemctl: new Set(['status', 'is-active', 'is-enabled', 'is-failed', 'list-units', 'list-unit-files', 'list-timers', 'show', 'cat', 'list-dependencies']),
+  docker: new Set(['ps', 'images', 'logs', 'inspect', 'stats', 'version', 'info', 'top', 'port', 'diff', 'history']),
+  git: new Set(['status', 'log', 'show', 'diff', 'branch', 'rev-parse', 'describe', 'remote', 'tag', 'ls-files', 'blame', 'config']),
+  kubectl: new Set(['get', 'describe', 'logs', 'top', 'version', 'explain', 'api-resources']),
+  pm2: new Set(['list', 'ls', 'status', 'show', 'describe', 'logs', 'jlist', 'prettylist']),
+  apt: new Set(['list', 'show', 'policy', 'search']), dpkg: new Set(['-l', '-L', '-s', '--list', '--status']), rpm: new Set(['-q', '-qa', '-qi', '-ql']),
+  npm: new Set(['ls', 'list', 'view', 'outdated', '-v', '--version']), pip: new Set(['list', 'show', 'freeze', '--version']), crontab: new Set(['-l']),
+};
+
+const OPTIONS_WITH_VALUE: Record<string, Set<string>> = {
+  git: new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']),
+  docker: new Set(['-H', '--host', '--context', '--config', '-l', '--log-level']),
+  kubectl: new Set(['-n', '--namespace', '--context', '--cluster', '--kubeconfig', '-s', '--server', '--user']),
+  systemctl: new Set(['-H', '--host', '-M', '--machine', '-p', '--property', '-n', '--lines', '-o', '--output', '--state', '-t', '--type']),
+};
+
+/**
+ * Whether a command only reads (ls, cat, grep, systemctl status, docker ps, curl for a health check…). Such commands
+ * skip a server's "ask before every change" setting. Anything uncertain counts as a change: redirection to a file,
+ * command substitution, sed -i, find -delete/-exec, curl uploads, or a program not on the read-only list.
+ */
+export function isReadOnlyCommand(command: unknown): boolean {
+  const text = String(command ?? '').trim();
+  if (!text || /`|\$\(|<\(|>\(/.test(text)) { return false; }
+  // Only discarding output is allowed: >/dev/null, 2>/dev/null, 2>&1.
+  const skeleton = text.replace(/'[^']*'|"(?:[^"\\\\]|\\\\.)*"/g, '""');
+  if (/`|\$\(|<\(|>\(/.test(skeleton)) { return false; }
+  if (/>/.test(skeleton.replace(/\d?>>?\s*\/dev\/null|\d?>&\d|&>\s*\/dev\/null/g, ''))) { return false; }
+  for (const { words: all, raw: segment } of shellCommands(text)) {
+    let words = all.filter((w) => !/^\d?>/.test(w) && w !== '/dev/null');
+    while (words.length && (words[0] === 'sudo' || words[0] === 'nice' || words[0] === 'timeout' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || /^-/.test(words[0]) || (/^\d+[smh]?$/.test(words[0]) && words.length > 1))) { words = words.slice(1); }
+    const [cmd, ...args] = words;
+    if (!cmd) { continue; }
+    const base = cmd.split('/').pop()!;
+    if (args.length === 1 && /^(-v|-V|--version|version)$/.test(args[0])) { continue; }
+    if (base === 'docker' && args[0] === 'compose') { if (!['ps', 'logs', 'config', 'ls', 'images', 'top', 'version'].includes(args[1] ?? '')) { return false; } continue; }
+    const sub = READ_SUB[base];
+    if (sub) {
+      // Global options before the sub-command may take a value (git -C dir, docker -H host, kubectl -n ns).
+      const valued = OPTIONS_WITH_VALUE[base] ?? new Set<string>();
+      let first = '';
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (sub.has(a) || !a.startsWith('-')) { first = a; break; }
+        if (valued.has(a)) { i++; }
+      }
+      if (!sub.has(first)) { return false; }
+      if (base === 'git' && first === 'branch' && args.some((a) => /^-[dDmMcC]$|^--(delete|move|copy)/.test(a))) { return false; }
+      if (base === 'git' && (first === 'config' || first === 'remote' || first === 'tag') && args.length > 2 && !args.includes('-l') && !args.includes('--list') && !args.includes('-v') && !args.includes('--get')) { return false; }
+      continue;
+    }
+    if (!READ_ONLY.has(base)) { return false; }
+    if (base === 'sed' && args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) { return false; }
+    if (base === 'awk' && /system\s*\(|print\s*>|\|\s*"/.test(segment)) { return false; }
+    if (base === 'find' && args.some((a) => /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/.test(a))) { return false; }
+    if (base === 'journalctl' && args.some((a) => /^--(vacuum|rotate|flush|relinquish|setup-keys)/.test(a))) { return false; }
+    if ((base === 'curl' || base === 'wget') && args.some((a) => /^(-X|--request|-d|--data.*|-F|--form|-T|--upload-file|-o|--output|-O|--remote-name|--post-data|--post-file|--method)$/.test(a) || /^-[a-zA-Z]*[dFTOo]/.test(a) && !/^-[a-zA-Z]*s?f?S?L?$/.test(a))) { return false; }
+    if (base === 'nginx' && !(args.length === 1 && args[0] === '-t') && !(args.length === 1 && args[0] === '-T')) { return false; }
+    if (base === 'ip' && !args.some((a) => /^(a|addr|address|r|route|link|neigh|-br|-s)$/.test(a)) || base === 'ip' && args.some((a) => /^(add|del|delete|set|flush|change|replace)$/.test(a))) { return false; }
+    if (base === 'env' && args.length) { return false; }
+  }
+  return true;
+}
+
 const POWER = new Set(['reboot', 'shutdown', 'poweroff', 'halt']);
 const DISK = new Set(['wipefs', 'fdisk', 'sfdisk', 'parted', 'mkswap']);
 const SYSTEM_PATH = /^(\/|\/\*|~|~\/|~\/\*|\/(etc|usr|var|boot|bin|sbin|lib|lib32|lib64|home|root|opt|srv|dev|proc|sys)\/?\*?)$/;
@@ -71,8 +175,8 @@ const SYSTEM_PATH = /^(\/|\/\*|~|~\/|~\/\*|\/(etc|usr|var|boot|bin|sbin|lib|lib3
 export function catastrophicReason(command: unknown): string | undefined {
   const text = String(command ?? '');
   if (/:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/.test(text)) { return 'fork bomb'; }
-  for (const segment of text.split(/&&|\|\||[;|&\n]/)) {
-    let words = segment.trim().split(/\s+/).map((w) => w.replace(/^["']|["']$/g, '')).filter(Boolean);
+  for (const { words: all } of shellCommands(text)) {
+    let words = all;
     while (words.length && (words[0] === 'sudo' || words[0] === 'env' || words[0] === 'nohup' || words[0] === 'exec' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || (words[0].startsWith('-') && words.length > 1))) { words = words.slice(1); }
     const [cmd, ...args] = words;
     if (!cmd) { continue; }
@@ -138,7 +242,7 @@ export function createRemoteTools(host: RemoteHost): { tools: Tool[]; jobs: () =
       async run() {
         const all = host.servers();
         if (!all.length) { return 'No Linux servers are configured. Ask the user to add one in the Infraon sidebar (Servers → Add server).'; }
-        return all.map((s) => `- ${s.name}: ${s.user}@${s.host}:${s.port}${s.alwaysAsk ? ' (asks the user before every change, even in Auto-execute)' : ''}${s.notes ? `\n  Notes: ${s.notes.replace(/\n/g, '\n  ')}` : ''}`).join('\n');
+        return all.map((s) => `- ${s.name}: ${s.user}@${s.host}:${s.port}${s.notes ? `\n  Notes: ${s.notes.replace(/\n/g, '\n  ')}` : ''}`).join('\n');
       },
     },
     {

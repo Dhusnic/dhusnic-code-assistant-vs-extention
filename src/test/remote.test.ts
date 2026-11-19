@@ -1,4 +1,4 @@
-import { catastrophicReason, parseHostSpec, resolveServer, unknownServerMessage } from '../core/remoteTools';
+import { catastrophicReason, isReadOnlyCommand, parseHostSpec, resolveServer, shellCommands, unknownServerMessage } from '../core/remoteTools';
 import { after, before, describe, it } from 'node:test';
 import * as assert from 'assert/strict';
 import * as fs from 'fs/promises';
@@ -272,8 +272,8 @@ describe('remote tools', () => {
     temps.push(ws);
     pool = newPool();
     const infos: RemoteServerInfo[] = [
-      { name: 'prod', host: '127.0.0.1', port: server.port, user: 'tester', auth: 'password', notes: 'App in /deploy/app\nService: app.service', alwaysAsk: true },
-      { name: 'keybox', host: '127.0.0.1', port: server.port, user: 'tester', auth: 'key', alwaysAsk: false },
+      { name: 'prod', host: '127.0.0.1', port: server.port, user: 'tester', auth: 'password', notes: 'App in /deploy/app\nService: app.service' },
+      { name: 'keybox', host: '127.0.0.1', port: server.port, user: 'tester', auth: 'key' },
     ];
     remote = createRemoteTools({
       pool,
@@ -289,7 +289,7 @@ describe('remote tools', () => {
 
   it('list_servers shows each server with its notes', async () => {
     const out = await run('list_servers', {});
-    assert.match(out, /- prod: tester@127\.0\.0\.1:\d+ \(asks the user before every change, even in Auto-execute\)\n {2}Notes: App in \/deploy\/app\n {2}Service: app\.service/);
+    assert.match(out, /- prod: tester@127\.0\.0\.1:\d+\n {2}Notes: App in \/deploy\/app\n {2}Service: app\.service/);
     assert.match(out, /- keybox: tester@127\.0\.0\.1:\d+$/m);
   });
 
@@ -501,5 +501,34 @@ describe('reading a server address', () => {
   });
   it('points the agent to connect_server for an address that is not saved', () => {
     assert.match(unknownServerMessage([], '10.0.4.110'), /call connect_server/);
+  });
+});
+
+describe('splitting shell commands', () => {
+  it('keeps quoted separators inside words', () => {
+    assert.deepEqual(shellCommands(`grep -iE 'web|ui' f | head -2; echo "a;b" && ls`).map((c) => c.words), [['grep', '-iE', 'web|ui', 'f'], ['head', '-2'], ['echo', 'a;b'], ['ls']]);
+    assert.deepEqual(shellCommands('cat a 2>&1 | wc -l').map((c) => c.words), [['cat', 'a', '2>&1'], ['wc', '-l']]);
+  });
+  it('does not flag a dangerous word inside quotes', () => {
+    assert.equal(catastrophicReason("grep -E 'error|reboot' /var/log/syslog"), undefined);
+    assert.ok(catastrophicReason("echo 'x' | sudo reboot"));
+  });
+});
+
+describe('commands that only read', () => {
+  it('recognises looking-only commands, including the ones agents use to explore', () => {
+    for (const c of ["cat /opt/apmcore/config/*.conf 2>/dev/null | grep -iE 'web|ui|static|root' | head -20", 'ls -la /opt/apmcore/', 'ls -la /opt/apmcore/web/',
+      'systemctl status app.service --no-pager -n 30', 'journalctl -u app -n 50 --no-pager', 'df -h', 'free -m', 'docker ps -a', 'docker compose ps', 'docker logs api --tail 100',
+      'git -C /opt/app log -1 --oneline', 'curl -fsS localhost:8080/health', 'sudo tail -n 100 /var/log/syslog', 'ps aux | grep java', 'find /opt -name "*.jar" -mtime -1',
+      'nginx -t', 'node --version', 'ip addr', 'pm2 list', 'uptime && who', "sed -n '1,20p' app.conf", 'cat a 2>&1 | head', "grep '>' f", 'echo "a > b"']) {
+      assert.equal(isReadOnlyCommand(c), true, c);
+    }
+  });
+  it('treats anything that may change the server as a change', () => {
+    for (const c of ['systemctl restart app', 'mkdir -p /opt/x', 'echo hi > /etc/motd', 'cat a >> b', "sed -i 's/a/b/' f", 'find /tmp -name x -delete', 'find . -exec rm {} \\;',
+      'docker compose up -d', 'docker rm api', 'git pull', 'git branch -D old', 'curl -X POST localhost/api', 'curl -d x=1 localhost', 'curl -o /tmp/f http://x', 'wget -O /tmp/f http://x',
+      'npm install', 'rm -f x', 'cp a b', 'tar xzf a.tgz', 'echo $(rm -rf x)', 'ls; touch x', 'env FOO=1 ./deploy.sh', 'ip route add 1.2.3.4 via 5.6.7.8', 'journalctl --vacuum-time=1d', 'awk \'{system("rm x")}\' f']) {
+      assert.equal(isReadOnlyCommand(c), false, c);
+    }
   });
 });

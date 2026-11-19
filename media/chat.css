@@ -610,3 +610,6 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
 #serverDialog .mtitle, #serverDialog .actions, #serverDialog #serverTest { flex: 0 0 auto; }
 #serverDialog .sv-form { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; margin-right: -6px; }
 #serverDialog .actions { padding-top: 8px; border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent)); }
+
+/* why an approval is needed, when it is not just the permission mode */
+.approve .ap-why { font-size: 12px; margin: 2px 0 6px; color: var(--vscode-descriptionForeground); }

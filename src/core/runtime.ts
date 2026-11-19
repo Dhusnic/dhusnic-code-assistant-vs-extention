@@ -679,7 +679,7 @@ export class SessionManager {
         let diff;
         if (req.preview) { rt.previews.set(req.id, req.preview); diff = { id: req.id, path: req.preview.path, ...diffText(req.preview.oldText, req.preview.newText) }; }
         this.setStatus(rt, 'waiting', `Waiting for approval: ${req.detail}`);
-        this.emit(rt, { type: 'approve', id: req.id, kind: req.kind, name: req.name, detail: req.detail, diff });
+        this.emit(rt, { type: 'approve', id: req.id, kind: req.kind, name: req.name, detail: req.detail, diff, ...(req.reason ? { reason: req.reason } : {}) });
       }),
       todos: (items) => {
         rt.todos = mergeTodos(rt.todos, items);
