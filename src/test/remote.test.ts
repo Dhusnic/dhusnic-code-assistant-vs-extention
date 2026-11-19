@@ -1,3 +1,4 @@
+import { catastrophicReason, resolveServer, unknownServerMessage } from '../core/remoteTools';
 import { after, before, describe, it } from 'node:test';
 import * as assert from 'assert/strict';
 import * as fs from 'fs/promises';
@@ -288,12 +289,12 @@ describe('remote tools', () => {
 
   it('list_servers shows each server with its notes', async () => {
     const out = await run('list_servers', {});
-    assert.match(out, /- prod: tester@127\.0\.0\.1:\d+ \(every change needs the user's approval\)\n {2}Notes: App in \/deploy\/app\n {2}Service: app\.service/);
+    assert.match(out, /- prod: tester@127\.0\.0\.1:\d+ \(asks the user before every change, even in Auto-execute\)\n {2}Notes: App in \/deploy\/app\n {2}Service: app\.service/);
     assert.match(out, /- keybox: tester@127\.0\.0\.1:\d+$/m);
   });
 
   it('remote_exec rejects an unknown server', async () => {
-    await assert.rejects(run('remote_exec', { server: 'nope', command: 'ls' }), /Unknown server "nope"\. Configured servers: prod, keybox\./);
+    await assert.rejects(run('remote_exec', { server: 'nope', command: 'ls' }), /No saved server matches "nope"\. Saved servers: "prod" \(tester@127\.0\.0\.1:\d+\), "keybox" \(tester@127\.0\.0\.1:\d+\)\./);
   });
 
   it('remote_exec rejects an empty command', async () => {
@@ -445,5 +446,46 @@ describe('remote_exec permission rules', () => {
     const r = parseRule('remote_exec(prod:systemctl status*)', 'allow', 'user');
     assert.ok(r);
     assert.equal(r.pattern, 'prod:systemctl status*');
+  });
+});
+
+describe('finding a saved server', () => {
+  const servers = [
+    { name: 'personal server', host: '10.0.5.110', user: 'root', port: 22 },
+    { name: 'prod', host: 'app.example.internal', user: 'deploy', port: 2222 },
+  ];
+  it('matches by name in any letter case, by IP, host name, user@host and host:port', () => {
+    assert.equal(resolveServer(servers, 'personal server')?.name, 'personal server');
+    assert.equal(resolveServer(servers, 'Personal Server')?.name, 'personal server');
+    assert.equal(resolveServer(servers, '10.0.5.110')?.name, 'personal server');
+    assert.equal(resolveServer(servers, 'root@10.0.5.110')?.name, 'personal server');
+    assert.equal(resolveServer(servers, 'APP.example.internal')?.name, 'prod');
+    assert.equal(resolveServer(servers, 'app.example.internal:2222')?.name, 'prod');
+  });
+  it('does not guess for an unsaved or ambiguous address', () => {
+    assert.equal(resolveServer(servers, '10.0.4.110'), undefined);
+    assert.equal(resolveServer([...servers, { name: 'copy', host: '10.0.5.110', user: 'admin', port: 22 }], '10.0.5.110'), undefined);
+    assert.equal(resolveServer([...servers, { name: 'copy', host: '10.0.5.110', user: 'admin', port: 22 }], 'admin@10.0.5.110')?.name, 'copy');
+  });
+  it('lists the saved servers when nothing matches and forbids asking for passwords', () => {
+    const m = unknownServerMessage(servers, '10.0.4.110');
+    assert.match(m, /No saved server matches "10\.0\.4\.110"/);
+    assert.match(m, /"personal server" \(root@10\.0\.5\.110:22\)/);
+    assert.match(m, /Never ask the user to type a password/);
+  });
+});
+
+describe('commands that could wreck a server', () => {
+  it('flags reboots, formatting, disk overwrites and recursive deletes of system folders', () => {
+    for (const c of ['reboot', 'sudo reboot', 'sudo -n shutdown -h now', 'systemctl reboot', 'init 6', 'mkfs.ext4 /dev/sdb1', 'dd if=/dev/zero of=/dev/sda bs=1M',
+      'rm -rf /', 'sudo rm -rf /etc', 'rm -fr /var/*', 'cd /opt && rm -rf /usr', 'chmod -R 777 /', ':(){ :|:& };:', 'echo hi; /sbin/poweroff']) {
+      assert.ok(catastrophicReason(c), c);
+    }
+  });
+  it('leaves everyday operations alone, including words that only look dangerous', () => {
+    for (const c of ['echo reboot', 'systemctl restart nginx', 'systemctl status app --no-pager', 'rm -rf /opt/app/releases/old', 'rm -rf ./build', 'df -h',
+      'grep shutdown /var/log/syslog', 'docker compose up -d', 'dd if=/dev/zero of=/tmp/test bs=1M count=1', 'chmod -R 755 /opt/app']) {
+      assert.equal(catastrophicReason(c), undefined, c);
+    }
   });
 });

@@ -10,7 +10,7 @@ import { HookConfig, HookEvent, hasHooks, mergeHooks, parseHooks, runHooks } fro
 import { LlmFn } from '../../core/llm';
 import { PermissionRule, evaluatePermission, loadPermissionSettings } from '../../core/permissions';
 import { requiresApproval } from '../../core/policy';
-import { REMOTE_CHANGING } from '../../core/remoteTools';
+import { REMOTE_CHANGING, catastrophicReason } from '../../core/remoteTools';
 import { SecretVault, redactMessages } from '../../core/redact';
 
 const TRUST_KEY = 'trustedProjectSettings';
@@ -40,6 +40,8 @@ export class SafetyCenter {
   private knownSecrets = new Map<string, string>();
   /** Set by the hub: whether a server wants approval for every change. */
   remoteAlwaysAsk?: (server: unknown) => boolean;
+  /** Set by the hub: the saved name of a server given by name, IP or user@host. */
+  remoteResolve?: (server: unknown) => string | undefined;
   private auditLog?: AuditLog;
   errors: string[] = [];
 
@@ -137,6 +139,11 @@ export class SafetyCenter {
 
   private async decide(req: ToolRequest, sid: string, aid: string): Promise<GuardDecision> {
     await this.ensure();
+    // Rules and approvals are keyed by the saved name, so a server given by its IP gets the same treatment.
+    if (req.tool.startsWith('remote_') && req.args && typeof req.args === 'object' && 'server' in req.args) {
+      const name = this.remoteResolve?.(req.args.server);
+      if (name) { req.args.server = name; }
+    }
     const d = evaluatePermission(this.rules, { tool: req.tool, kind: req.kind, args: req.args, root: req.root });
     if (d.effect) { this.record({ sessionId: sid, agentId: aid, kind: 'permission', tool: req.tool, detail: describe(req), outcome: d.effect, ruleRaw: d.rule?.raw }); }
     if (d.effect === 'deny') { return { effect: 'deny', reason: d.rule?.raw ?? d.reason }; }
@@ -146,6 +153,10 @@ export class SafetyCenter {
       const local = evaluatePermission(this.rules, { tool: up ? 'read_file' : 'write_file', kind: up ? 'read' : 'edit', args: { path: req.args?.local_path }, root: req.root });
       if (local.effect === 'deny') { return { effect: 'deny', reason: local.rule?.raw ?? local.reason }; }
       if (!up && PROTECTED.test(String(req.args?.local_path ?? ''))) { return { effect: 'ask', reason: 'agent permission settings are protected' }; }
+    }
+    if (req.tool === 'remote_exec' && d.effect !== 'allow') {
+      const danger = catastrophicReason(req.args?.command);
+      if (danger) { return { effect: 'ask', reason: `this command could ${danger}` }; }
     }
     if (REMOTE_CHANGING.has(req.tool) && d.effect !== 'allow' && this.remoteAlwaysAsk?.(req.args?.server)) { return { effect: 'ask', reason: 'this server asks before every change' }; }
     const target = String(req.args?.path ?? '');

@@ -26,7 +26,7 @@ export const flows: Flow[] = [
         await s.click('#modePill');
         await s.clickText('.menu .item', 'Auto-execute');
         await t.gw.script(
-          callTool('remote_exec', { server: SERVER, command: `echo "result-$((40+2))"; echo leaked:${PASSWORD}` }),
+          callTool('remote_exec', { server: '127.0.0.1', command: `echo "result-$((40+2))"; echo leaked:${PASSWORD}` }),
           reply('The server answered.'),
         );
         await s.send('Check the server');
@@ -35,7 +35,7 @@ export const flows: Flow[] = [
         await t.shot('remote-approval');
         await s.clickText('.approve:not(.done) .actions button', 'Allow');
         await s.waitFor('.msg.assistant .md', { text: 'The server answered.', timeoutMs: 20_000 });
-        await s.waitFor('.tool.ok', { text: `Remote ${SERVER}` });
+        await s.waitFor('.tool.ok', { text: 'Remote 127.0.0.1' }); // found by IP: the agent may name a server by its address
 
         const result = String(lastOfRole(await t.gw.last(), 'tool')?.content);
         assert.match(result, /result-42/);
@@ -53,3 +53,40 @@ export const flows: Flow[] = [
     },
   },
 ];
+
+flows.push({
+  name: 'auto-execute-runs-remote-commands-without-asking-but-a-reboot-still-asks',
+  timeoutMs: 60_000,
+  async run(t) {
+    if (!findShell()) { throw new Error('no bash found for the test SSH server'); }
+    const ssh = await startSshServer({ user: 'deploy', password: PASSWORD });
+    try {
+      await t.hub.ctx.globalState.update('sshHostKeys', { ...t.hub.ctx.globalState.get('sshHostKeys', {}), [`127.0.0.1:${ssh.port}`]: ssh.hostKeyFingerprint });
+      await t.hub.servers.saveLinux(undefined, { name: SERVER, host: '127.0.0.1', port: ssh.port, user: 'deploy', auth: 'password', password: PASSWORD, env: {} });
+      const s = await t.newSession();
+      await s.click('#modePill');
+      await s.clickText('.menu .item', 'Auto-execute');
+      await t.gw.script(
+        callTool('remote_exec', { server: SERVER, command: 'echo auto-ok' }),
+        callTool('remote_exec', { server: SERVER, command: 'sudo reboot' }),
+        reply('Done checking.'),
+      );
+      await s.send('Check it, then reboot it');
+      await s.waitFor('.approve:not(.done) .q', { text: 'Allow command?', timeoutMs: 20_000 });
+      assert.equal(await s.count('.approve'), 1, 'only the reboot asks');
+      await s.waitFor('.approve:not(.done) pre', { text: 'sudo reboot' });
+      await s.waitFor('.tool.ok', { text: 'echo auto-ok' });
+      await s.clickText('.approve:not(.done) .actions button', 'Deny');
+      await s.waitFor('.msg.assistant .md', { text: 'Done checking.', timeoutMs: 20_000 });
+      const tools = (await t.gw.last()).messages.filter((m: any) => m.role === 'tool').map((m: any) => String(m.content));
+      assert.ok(tools.some((c: string) => /auto-ok/.test(c)), 'the check ran without approval');
+      assert.ok(tools.some((c: string) => /DENIED by user/.test(c)), 'the reboot was refused');
+      await s.click('#modePill');
+      await s.clickText('.menu .item', 'Ask before edits');
+    } finally {
+      await t.hub.servers.remove('linux', SERVER);
+      t.hub.remote.pool.close(SERVER);
+      await ssh.close();
+    }
+  },
+});

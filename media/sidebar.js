@@ -193,7 +193,7 @@
     $('serverPassword').value = ''; $('serverKey').value = ''; $('serverPassphrase').value = '';
     $('serverPassphrase').placeholder = linux ? 'Leave empty to keep the saved passphrase' : '';
     $('serverNotes').value = linux ? (linux.notes || '') : '';
-    $('serverAlwaysAsk').checked = linux ? linux.alwaysAsk !== false : true;
+    $('serverAlwaysAsk').checked = !!(linux && linux.alwaysAsk === true);
     testing = false; $('serverTestBtn').disabled = false; setTestLine('', '');
     $('serverPassword').placeholder = linux ? 'Leave empty to keep the saved password' : '';
     $('serverKey').placeholder = linux ? 'Leave empty to keep the saved key' : '-----BEGIN OPENSSH PRIVATE KEY-----';

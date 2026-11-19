@@ -95,6 +95,17 @@ export class ServerRegistry {
     private mcpStatus: (name: string) => string | undefined,
   ) {}
 
+  /**
+   * "Ask before every change" used to be on for every new server and overrode Auto-execute. It is now an opt-in for
+   * production servers, so servers saved with the old default are switched off once.
+   */
+  async migrateAskDefault(): Promise<void> {
+    if (this.ctx.globalState.get<boolean>('serverAskIsOptIn')) { return; }
+    const list = this.linux();
+    if (list.some((s) => s.alwaysAsk !== false)) { await this.saveLinuxList(list.map((s) => ({ ...s, alwaysAsk: false }))); }
+    await this.ctx.globalState.update('serverAskIsOptIn', true);
+  }
+
   private get cfg() { return vscode.workspace.getConfiguration('infraonAssistant'); }
   /** Only user-level entries are written; configuration values are read-only, so they are always copied first. */
   private userMcp(): Record<string, any> { return JSON.parse(JSON.stringify(this.cfg.inspect<Record<string, any>>('mcpServers')?.globalValue ?? {})); }
@@ -158,7 +169,7 @@ export class ServerRegistry {
     // Write the new secret before removing the old one, so a failure never loses the credential.
     await this.ctx.secrets.store(secretKey(input.name), JSON.stringify(secret));
     if (original && original !== input.name) { await this.ctx.secrets.delete(secretKey(original)); }
-    const entry: LinuxServer = { name: input.name, host: input.host, port: input.port, user: input.user, auth: input.auth, envKeys: Object.keys(env), notes: input.notes?.trim() || undefined, alwaysAsk: input.alwaysAsk !== false };
+    const entry: LinuxServer = { name: input.name, host: input.host, port: input.port, user: input.user, auth: input.auth, envKeys: Object.keys(env), notes: input.notes?.trim() || undefined, alwaysAsk: input.alwaysAsk === true };
     await this.saveLinuxList([...list.filter((s) => s.name !== original && s.name !== input.name), entry]);
   }
 

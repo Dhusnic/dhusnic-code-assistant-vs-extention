@@ -18,13 +18,67 @@ export const REMOTE_TOOLS = ['list_servers', 'remote_exec', 'remote_job_output',
 /** Tools that change something on a server. */
 export const REMOTE_CHANGING = new Set(['remote_exec', 'remote_job_stop', 'remote_upload']);
 
+/**
+ * Finds a saved server by its name (any letter case), its IP or host name, or user@host. Users often refer to a
+ * server by address, so both must work. Returns undefined when nothing matches or an address is ambiguous.
+ */
+export function resolveServer<T extends { name: string; host: string; user: string; port?: number }>(servers: T[], query: unknown): T | undefined {
+  const q = String(query ?? '').trim();
+  if (!q) { return undefined; }
+  const l = q.toLowerCase();
+  const exact = servers.find((s) => s.name === q) ?? servers.find((s) => s.name.toLowerCase() === l);
+  if (exact) { return exact; }
+  const byAddress = servers.filter((s) => {
+    const host = s.host.toLowerCase();
+    return host === l || `${s.user}@${host}`.toLowerCase() === l || `${host}:${s.port ?? 22}` === l || `${s.user}@${host}:${s.port ?? 22}`.toLowerCase() === l;
+  });
+  return byAddress.length === 1 ? byAddress[0] : undefined;
+}
+
+/** What the agent is told when no saved server matches, so it can suggest the right one instead of asking for a password. */
+export function unknownServerMessage(servers: Array<{ name: string; host: string; user: string; port: number }>, query: unknown): string {
+  const q = String(query ?? '').trim();
+  const list = servers.map((s) => `"${s.name}" (${s.user}@${s.host}:${s.port})`).join(', ');
+  return `No saved server matches "${q}". ${list ? `Saved servers: ${list}. If one of these is what the user meant (for example a similar address), ask the user to confirm before using it.` : 'No servers are saved yet.'} `
+    + 'Otherwise ask the user to add the server in the Infraon sidebar (Servers → Add server) and then continue. Never ask the user to type a password or private key in the chat.';
+}
+
+const POWER = new Set(['reboot', 'shutdown', 'poweroff', 'halt']);
+const DISK = new Set(['wipefs', 'fdisk', 'sfdisk', 'parted', 'mkswap']);
+const SYSTEM_PATH = /^(\/|\/\*|~|~\/|~\/\*|\/(etc|usr|var|boot|bin|sbin|lib|lib32|lib64|home|root|opt|srv|dev|proc|sys)\/?\*?)$/;
+
+/**
+ * Why a remote command could wreck the server (reboot, formatting, wiping system folders), or undefined.
+ * These still ask the user first in every mode, including Auto-execute. Checks each command word, not text, so
+ * "echo reboot" is fine.
+ */
+export function catastrophicReason(command: unknown): string | undefined {
+  const text = String(command ?? '');
+  if (/:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/.test(text)) { return 'fork bomb'; }
+  for (const segment of text.split(/&&|\|\||[;|&\n]/)) {
+    let words = segment.trim().split(/\s+/).map((w) => w.replace(/^["']|["']$/g, '')).filter(Boolean);
+    while (words.length && (words[0] === 'sudo' || words[0] === 'env' || words[0] === 'nohup' || words[0] === 'exec' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || (words[0].startsWith('-') && words.length > 1))) { words = words.slice(1); }
+    const [cmd, ...args] = words;
+    if (!cmd) { continue; }
+    const base = cmd.split('/').pop()!;
+    if (POWER.has(base)) { return `${base} the server`; }
+    if (base === 'systemctl' && args.some((a) => POWER.has(a))) { return 'reboot or power off the server'; }
+    if (base === 'init' && (args[0] === '0' || args[0] === '6')) { return 'reboot or power off the server'; }
+    if (base.startsWith('mkfs') || DISK.has(base)) { return 'format or repartition a disk'; }
+    if (base === 'dd' && args.some((a) => /^of=\/dev\//.test(a))) { return 'overwrite a disk device'; }
+    if (base === 'rm' && args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === '--recursive') && args.some((a) => SYSTEM_PATH.test(a))) { return 'delete a system folder recursively'; }
+    if ((base === 'chmod' || base === 'chown') && args.some((a) => a === '-R' || a === '--recursive') && args.some((a) => a === '/' || a === '/*')) { return `${base} the whole file system`; }
+  }
+  return undefined;
+}
+
 const MAX_TIMEOUT_S = 1800;
 const JOB_LINES = 4000;
 const MAX_JOBS = 20;
 
 const GUIDE = `Runs a shell command on a configured Linux server over SSH (never use run_command with ssh, scp or sshpass: they cannot authenticate here).
 How to work on servers like an experienced operator:
-- Start with list_servers to see the servers and their notes (paths, service names, health URLs).
+- Start with list_servers to see the saved servers (name, user@host) and their notes (paths, service names, health URLs). A server can be given by its name or its IP address. Credentials are already saved: never ask the user for a password or key in the chat. If the address the user gave is not saved, show the saved servers and ask whether they meant one of them, or ask them to add it in the sidebar.
 - Look before you change: check state first (systemctl status, docker ps, df -h, free -m, git -C <dir> log -1, ls).
 - Commands run non-interactively: never start editors, pagers or prompts (use --no-pager, -y, DEBIAN_FRONTEND=noninteractive). If a tool is missing from PATH, run it through bash -lc '...'.
 - sudo: use "sudo -S -p '' <command>" and set use_sudo_password: true; the stored password is supplied privately and you never see it.
@@ -38,8 +92,9 @@ interface Job { id: string; server: string; command: string; lines: string[]; pa
 export function createRemoteTools(host: RemoteHost): { tools: Tool[]; jobs: () => Job[]; dispose(): void } {
   const jobs = new Map<string, Job>();
   const known = (name: unknown): RemoteServerInfo => {
-    const s = host.servers().find((x) => x.name === String(name ?? ''));
-    if (!s) { throw new Error(`Unknown server "${String(name ?? '')}". Configured servers: ${host.servers().map((x) => x.name).join(', ') || 'none'}.`); }
+    const all = host.servers();
+    const s = resolveServer(all, name);
+    if (!s) { throw new Error(unknownServerMessage(all, name)); }
     return s;
   };
   const push = (job: Job, chunk: string) => {
@@ -67,13 +122,13 @@ export function createRemoteTools(host: RemoteHost): { tools: Tool[]; jobs: () =
       async run() {
         const all = host.servers();
         if (!all.length) { return 'No Linux servers are configured. Ask the user to add one in the Infraon sidebar (Servers → Add server).'; }
-        return all.map((s) => `- ${s.name}: ${s.user}@${s.host}:${s.port}${s.alwaysAsk ? ' (every change needs the user\'s approval)' : ''}${s.notes ? `\n  Notes: ${s.notes.replace(/\n/g, '\n  ')}` : ''}`).join('\n');
+        return all.map((s) => `- ${s.name}: ${s.user}@${s.host}:${s.port}${s.alwaysAsk ? ' (asks the user before every change, even in Auto-execute)' : ''}${s.notes ? `\n  Notes: ${s.notes.replace(/\n/g, '\n  ')}` : ''}`).join('\n');
       },
     },
     {
       kind: 'exec',
       spec: fnSpec('remote_exec', GUIDE, {
-        server: { type: 'string', description: 'Server name from list_servers.' },
+        server: { type: 'string', description: 'The server: its name from list_servers, its IP address or host name, or user@host.' },
         command: { type: 'string', description: 'Shell command to run.' },
         cwd: { type: 'string', description: 'Remote working directory (optional).' },
         timeout_seconds: { type: 'number', description: `Time limit for foreground commands (default ${DEFAULT_TIMEOUT_MS / 1000}, max ${MAX_TIMEOUT_S}).` },
@@ -154,7 +209,7 @@ export function createRemoteTools(host: RemoteHost): { tools: Tool[]; jobs: () =
     {
       kind: 'exec',
       spec: fnSpec('remote_upload', 'Upload a workspace file or folder to a server over SFTP (folders keep their structure; .git, node_modules and similar are skipped). Prefer uploading one archive for large builds.', {
-        server: { type: 'string' }, local_path: { type: 'string', description: 'File or folder in the workspace.' }, remote_path: { type: 'string', description: 'Destination file, or destination folder for a folder.' },
+        server: { type: 'string', description: 'Server name, IP or host name.' }, local_path: { type: 'string', description: 'File or folder in the workspace.' }, remote_path: { type: 'string', description: 'Destination file, or destination folder for a folder.' },
       }, ['server', 'local_path', 'remote_path']),
       describe: (a) => `Upload ${a.local_path} → ${a.server}:${a.remote_path}`,
       async run(a, ctx) {
@@ -166,7 +221,7 @@ export function createRemoteTools(host: RemoteHost): { tools: Tool[]; jobs: () =
     {
       kind: 'edit',
       spec: fnSpec('remote_download', 'Download a file or folder from a server into the workspace (for logs, configs or backups). Existing local files are overwritten and can be restored with rewind.', {
-        server: { type: 'string' }, remote_path: { type: 'string' }, local_path: { type: 'string', description: 'Destination in the workspace.' },
+        server: { type: 'string', description: 'Server name, IP or host name.' }, remote_path: { type: 'string' }, local_path: { type: 'string', description: 'Destination in the workspace.' },
       }, ['server', 'remote_path', 'local_path']),
       describe: (a) => `Download ${a.server}:${a.remote_path} → ${a.local_path}`,
       async run(a, ctx) {
@@ -181,7 +236,7 @@ export function createRemoteTools(host: RemoteHost): { tools: Tool[]; jobs: () =
     {
       kind: 'read',
       spec: fnSpec('remote_read_file', 'Read a text file on a server (up to 2 MB), optionally a 1-based line range.', {
-        server: { type: 'string' }, path: { type: 'string' }, start_line: { type: 'number' }, end_line: { type: 'number' },
+        server: { type: 'string', description: 'Server name, IP or host name.' }, path: { type: 'string' }, start_line: { type: 'number' }, end_line: { type: 'number' },
       }, ['server', 'path']),
       describe: (a) => `Read ${a.server}:${a.path}`,
       async run(a) {
