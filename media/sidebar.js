@@ -230,7 +230,6 @@
     const title = $('dialogTitle');
     const nameInput = $('serverName');
     const cmdInput = $('serverCommand');
-    const argsInput = $('serverArgs');
     const envList = $('envList');
     
     envVars = [];
@@ -240,15 +239,13 @@
       const server = data.servers[idx];
       title.textContent = 'Edit Server';
       nameInput.value = server.name;
-      cmdInput.value = server.command;
-      argsInput.value = server.args?.join(' ') ?? '';
+      cmdInput.value = server.command + (server.args?.length ? ' ' + server.args.join(' ') : '');
       envVars = server.env ? Object.entries(server.env) : [];
       renderEnvInputs();
     } else {
       title.textContent = 'Add Server';
       nameInput.value = '';
       cmdInput.value = '';
-      argsInput.value = '';
     }
     
     dialog.hidden = false;
@@ -301,13 +298,17 @@
 
   $('dialogSave').onclick = () => {
     const name = $('serverName').value.trim();
-    const command = $('serverCommand').value.trim();
-    const args = $('serverArgs').value.trim().split(/\s+/).filter(Boolean);
+    const fullCommand = $('serverCommand').value.trim();
     
-    if (!name || !command) {
-      alert('Server name and command are required');
+    if (!name || !fullCommand) {
+      alert('Server name and full command are required');
       return;
     }
+
+    // Parse command and args
+    const parts = fullCommand.split(/\s+/);
+    const command = parts[0];
+    const args = parts.slice(1);
 
     const env: Record<string, string> = {};
     envVars.forEach(([k, v]) => { if (k && v) env[k] = v; });

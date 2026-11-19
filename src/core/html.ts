@@ -111,12 +111,8 @@ export function buildSidebarHtml(p: HtmlParts): string {
         <input type="text" id="serverName" placeholder="e.g., github, openai" required>
       </div>
       <div class="form-group">
-        <label for="serverCommand">Command</label>
-        <input type="text" id="serverCommand" placeholder="e.g., npx" required>
-      </div>
-      <div class="form-group">
-        <label for="serverArgs">Arguments (optional)</label>
-        <input type="text" id="serverArgs" placeholder="e.g., -y @modelcontextprotocol/server-github">
+        <label for="serverCommand">Full Command</label>
+        <input type="text" id="serverCommand" placeholder="e.g., npx -y @modelcontextprotocol/server-github" required>
       </div>
       <div class="form-group">
         <label>Environment Variables</label>
