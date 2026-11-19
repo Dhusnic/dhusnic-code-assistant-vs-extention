@@ -47,7 +47,7 @@ const canonicalTool = (name: string): string => {
 };
 
 const takesPattern = (tool: string): boolean =>
-  tool === 'run_command' || tool === 'edit' || tool === 'read' || EDIT_TOOLS.has(tool) || READ_TOOLS.has(tool);
+  tool === 'run_command' || tool === 'remote_exec' || tool === 'edit' || tool === 'read' || EDIT_TOOLS.has(tool) || READ_TOOLS.has(tool);
 
 /** Parses one rule string. Returns null when malformed. */
 export function parseRule(raw: string, effect: RuleEffect, source: RuleSource): PermissionRule | null {
@@ -451,6 +451,16 @@ export function evaluatePermission(rules: PermissionRule[], q: PermissionQuery):
   const relevant = rules.filter((r) => appliesTo(r, q.tool, q.kind)).sort(bySource);
   if (!relevant.length) { return {}; }
   if (q.tool === 'run_command') { return evaluateCommand(relevant, q.args?.command, platform === 'win32'); }
+  if (q.tool === 'remote_exec') {
+    // remote_exec(prod:systemctl status*) applies to one server; remote_exec(systemctl status*) to every server.
+    const server = String(q.args?.server ?? '');
+    const scoped = relevant.flatMap((r) => {
+      const m = r.pattern ? /^([A-Za-z0-9][\w.-]*):([\s\S]*)$/.exec(r.pattern) : null;
+      if (!m) { return [r]; }
+      return m[1] === server ? [{ ...r, pattern: m[2] || undefined }] : [];
+    });
+    return evaluateCommand(scoped, q.args?.command, false);
+  }
   const raw = q.args?.path;
   const target = typeof raw === 'string' ? resolvePath(raw, q.root, platform) : undefined;
   for (const effect of ['deny', 'ask', 'allow'] as const) {

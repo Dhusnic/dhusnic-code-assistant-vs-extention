@@ -196,6 +196,10 @@ export class SecretVault {
   private bySecret = new Map<string, string>();
   private byPlaceholder = new Map<string, string>();
   private next = 1;
+  /** Exact values that are always secret (saved server passwords, environment values), whatever they look like. */
+  private known = new Map<string, string>();
+
+  addKnown(secret: string, kind: string): void { if (typeof secret === 'string' && secret.length >= 4) { this.known.set(secret, kind); } }
 
   get size(): number { return this.bySecret.size; }
 
@@ -218,6 +222,11 @@ export class SecretVault {
       if (spans.length) { sources++; }
       for (const s of spans) { s.rank = rank; s.kind = d.kind; taken.push(s); }
     });
+    for (const [secret, kind] of this.known) {
+      let i = text.indexOf(secret), found = false;
+      while (i >= 0) { taken.push({ start: i, end: i + secret.length, rank: -1, kind }); found = true; i = text.indexOf(secret, i + secret.length); }
+      if (found) { sources += 2; }
+    }
     if (!taken.length) { return { text, count: 0, kinds: [] }; }
     // Each detector reports in text order, so a single source needs no sort.
     if (sources > 1) { taken.sort((a, b) => a.start - b.start || b.end - a.end || a.rank - b.rank); }

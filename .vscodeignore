@@ -2,6 +2,12 @@ src/**
 out/test/**
 **/*.map
 node_modules/**
+# runtime dependency of the SSH tools (pure JavaScript; native extras are not shipped)
+!node_modules/ssh2/**
+!node_modules/asn1/**
+!node_modules/bcrypt-pbkdf/**
+!node_modules/safer-buffer/**
+!node_modules/tweetnacl/**
 .vscode/**
 tsconfig.json
 deploy.ps1

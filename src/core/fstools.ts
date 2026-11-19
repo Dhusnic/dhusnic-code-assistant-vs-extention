@@ -43,18 +43,53 @@ export async function findFiles(root: string, glob: string, limit = 200, signal?
   return out;
 }
 
+/** ssh, scp and friends cannot log in from here: they wait for a password prompt nobody can answer. */
+export function remoteShellHint(command: unknown): string | undefined {
+  const text = String(command ?? '');
+  if (!/(^|[;&|(\s])(ssh|scp|sftp|sshpass|plink|pscp)(\.exe)?(\s|$)/i.test(text)) { return undefined; }
+  return 'ssh, scp and sftp cannot be used through run_command: they wait for a password prompt that nobody can answer. '
+    + 'Use list_servers and remote_exec (or remote_upload / remote_download) instead. If the server is not saved yet, call connect_server with its address: the user enters the credentials in a secure prompt and the server is saved.';
+}
+
 export function runShell(command: string, ctx: ToolCtx, timeoutMs = 120000): Promise<string> {
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32';
-    const p = spawn(isWin ? 'powershell.exe' : 'bash', isWin ? ['-NoProfile', '-Command', command] : ['-lc', command], { cwd: ctx.root });
-    let out = '';
-    const timer = setTimeout(() => { p.kill(); out += `\n[timeout after ${timeoutMs / 1000}s]`; }, timeoutMs);
-    const abort = () => p.kill();
+    // No input: a command that waits for a password or a key press fails at once instead of hanging.
+    // On POSIX the command gets its own process group so the whole tree can be stopped.
+    const p = spawn(isWin ? 'powershell.exe' : 'bash', isWin ? ['-NoProfile', '-NonInteractive', '-Command', command] : ['-lc', command], {
+      cwd: ctx.root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !isWin,
+    });
+    let out = '', note = '', done = false;
+    let grace: NodeJS.Timeout | undefined;
+    const finish = (code: number | null) => {
+      if (done) { return; }
+      done = true;
+      clearTimeout(timer); clearTimeout(grace);
+      ctx.signal.removeEventListener('abort', abort);
+      resolve(clip(`${out}${note}\n[exit ${code}]`));
+    };
+    // Killing only the shell would leave its children (ssh.exe, servers, watchers) running and holding the output
+    // open, so the call would never return. Stop the whole tree, then stop waiting shortly after.
+    const killTree = () => {
+      if (!p.pid) { return; }
+      if (isWin) { spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined); }
+      else { try { process.kill(-p.pid, 'SIGKILL'); } catch { try { p.kill('SIGKILL'); } catch { /* already gone */ } } }
+    };
+    const stop = (why: string) => {
+      if (done || grace) { return; }
+      note = why;
+      killTree();
+      grace = setTimeout(() => finish(null), 3000);
+    };
+    const timer = setTimeout(() => stop(`\n[stopped after ${timeoutMs / 1000}s: the command and every process it started were ended. Run long tasks in the background (for example with run_in_terminal).]`), timeoutMs);
+    const abort = () => stop('\n[cancelled]');
     ctx.signal.addEventListener('abort', abort, { once: true });
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
-    p.on('close', (code) => { clearTimeout(timer); ctx.signal.removeEventListener('abort', abort); resolve(clip(`${out}\n[exit ${code}]`)); });
-    p.on('error', (e) => { clearTimeout(timer); resolve(`ERROR: ${e.message}`); });
+    // A child that outlives the shell can keep the pipes open, so 'exit' also ends the wait after a moment.
+    p.on('exit', (code) => { if (!done) { setTimeout(() => finish(code), 1500); } });
+    p.on('close', (code) => finish(code));
+    p.on('error', (e) => { if (!done) { done = true; clearTimeout(timer); ctx.signal.removeEventListener('abort', abort); resolve(`ERROR: ${e.message}`); } });
   });
 }
 
@@ -189,10 +224,12 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
       spec: fnSpec('run_command',
         `Run a shell command in the workspace root and return its combined output and exit code (time limit 120s). ${process.platform === 'win32'
           ? 'Shell: Windows PowerShell 5.1 - chain with ";" or "if ($?) { ... }" (not &&), call curl.exe -sS --max-time 20 (not curl).'
-          : 'Shell: bash - chain with &&; curl -sS --max-time 20.'} Several read-only commands sent in one response run in parallel.`,
+          : 'Shell: bash - chain with &&; curl -sS --max-time 20.'} Several read-only commands sent in one response run in parallel. Never use ssh, scp or sftp here: use the remote_* tools for Linux servers.`,
         { command: { type: 'string' } }, ['command']),
       describe: (a) => `Run: ${a.command}`,
       async run(a, ctx) {
+        const remote = remoteShellHint(a.command);
+        if (remote) { throw new Error(remote); }
         const out = await runShell(a.command, ctx);
         indexFor(ctx.root).invalidate();
         return out;

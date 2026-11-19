@@ -17,6 +17,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: 'model', description: 'Show or switch the model', args: '[name]' },
   { name: 'init', description: 'Analyze the project and create a CLAUDE.md with its conventions' },
   { name: 'review', description: 'Review the uncommitted changes in the workspace' },
+  { name: 'deploy', description: 'Deploy to a Linux server: check, back up, apply, verify, roll back if needed', args: '[server] [what to deploy]' },
   { name: 'changes', description: 'Review every file this session changed: accept, revert or open diffs' },
   { name: 'commit', description: 'Write a commit message from the current diff and commit after you confirm' },
   { name: 'pr', description: 'Raise a pull request with your pr-creation skill' },
@@ -52,6 +53,22 @@ export const INIT_PROMPT = `Analyze this repository (structure, languages, build
 Keep it concise: purpose, layout, how to build/run/test, coding conventions, and hard rules a new engineer must follow. If CLAUDE.md already exists, improve it instead of replacing it.`;
 
 export const REVIEW_PROMPT = `Review the uncommitted changes in this workspace. Run \`git status\` and \`git diff\`, then report correctness bugs, security issues, and missing tests, ordered by severity, with file:line references. Do not modify any files.`;
+
+/** The safe deployment workflow behind /deploy. */
+export function deployPrompt(args: string): string {
+  return `Deploy to a Linux server${args ? `: ${args}` : ''}.
+
+Work like a careful release engineer:
+1. Call list_servers and read the target server's notes (paths, service names, health checks). If the server or what to deploy is unclear, ask me with ask_user_question before doing anything.
+2. Write the plan as a task list with todo_write.
+3. Build and test locally first with the project's own build and test commands. Stop if they fail.
+4. Inspect the server before changing it: current version or commit, service status, free disk space.
+5. Back up what you will replace (a timestamped copy or the previous release) and say where it is.
+6. Deploy: upload the build with remote_upload or pull it on the server, then install, migrate and restart. Run anything long with background: true and follow it with remote_job_output.
+7. Verify: service status, the last log lines, and the health check from the notes. Do not finish without verifying.
+8. If verification fails, roll back to the backup, verify again, and report what went wrong.
+Finish with: what was deployed, the version before and after, the verification evidence, and where the backup is.`;
+}
 
 export interface SlashApi {
   info(text: string): void;
@@ -111,6 +128,7 @@ export async function runSlash(p: ParsedSlash, api: SlashApi): Promise<boolean> 
       break;
     case 'init': await api.send(INIT_PROMPT, '/init'); break;
     case 'review': await api.send(REVIEW_PROMPT, '/review'); break;
+    case 'deploy': await api.send(deployPrompt(p.args), `/deploy${p.args ? ` ${p.args}` : ''}`); break;
     default: return false;
   }
   return true;
