@@ -171,7 +171,7 @@
                                                                                                   },
                                                                  "infraonAssistant.contextWindow":  {
                                                                                                         "type":  "number",
-                                                                                                        "default":  131072,
+                                                                                                        "default":  262144,
                                                                                                         "description":  "Context window (tokens) of the model. Used for the usage meter and auto-compaction."
                                                                                                     },
                                                                  "infraonAssistant.autoCompactThreshold":  {

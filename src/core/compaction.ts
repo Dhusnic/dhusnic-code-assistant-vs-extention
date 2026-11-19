@@ -1,7 +1,7 @@
 import { ChatMessage } from './llm';
 import { SUMMARY_PREFIX } from './sessions';
 
-export const DEFAULT_CONTEXT = 131072;
+export const DEFAULT_CONTEXT = 262144;
 export const DEFAULT_RATIO = 0.75;
 export const SUMMARY_ACK = 'Understood. I have the summary of our earlier conversation and will continue from it.';
 

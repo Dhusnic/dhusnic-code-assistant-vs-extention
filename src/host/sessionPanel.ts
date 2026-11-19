@@ -97,7 +97,7 @@ export class SessionPanel {
       sessionId: this.sid, agentId: this.focused, mainId: this.mainId, viewingSub: rt.role === 'sub',
       focusedAgent: { name: rt.name, type: rt.type, description: rt.description, status: rt.status, outcome: rt.outcome },
       agentTypes: this.hub.agentTypes.map((t) => ({ name: t.name, description: t.description, readOnly: !!t.readOnly, source: t.source })),
-      contextLimit: this.hub.cfg.get<number>('contextWindow', 131072), e2e: this.hub.e2e,
+      contextLimit: this.hub.cfg.get<number>('contextWindow', 262144), e2e: this.hub.e2e,
     };
   }
 

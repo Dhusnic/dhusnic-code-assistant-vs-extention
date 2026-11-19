@@ -325,7 +325,7 @@ export class Hub {
       memory: () => this.loadMemory(),
       snapshot: (turn, abs) => checkpoints.snapshot(turn, abs),
       restore: (turn) => checkpoints.restore(turn),
-      contextLimit: () => this.cfg.get<number>('contextWindow', 131072),
+      contextLimit: () => this.cfg.get<number>('contextWindow', 262144),
       compactRatio: () => this.cfg.get<number>('autoCompactThreshold', 0.75),
       activeFile: () => {
         const ed = vscode.window.activeTextEditor;
