@@ -11,6 +11,14 @@ const BOOKMARK = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" st
 const PENCIL = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10.8 2.7l2.5 2.5-7.6 7.6-3.2.7.7-3.2z"/><path d="M9.4 4.1l2.5 2.5"/></svg>';
 const FILES = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 1.8h6L12.5 5v9.2h-9z"/><path d="M8 6.5v4M6 8.5h4"/></svg>';
 const CLIP ='<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10.5 4.5l-5 5a1.5 1.5 0 002 2l5.5-5.5a3 3 0 00-4-4L3.5 7.5a4.5 4.5 0 006.5 6.5l4-4"/></svg>';
+const SERVER = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 9h4"/></svg>';
+const KEY = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M12.5 4.5a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"/><path d="M8 7v2.5a3.5 3.5 0 003.5 3.5h1.5"/></svg>';
+const EYE = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s4-5 7-5 7 5 7 5-4 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg>';
+const EYE_OFF = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 1l14 14"/><path d="M10.5 5.5A4.5 4.5 0 0114.5 8c0 2-4 5-7 5a7 7 0 01-4.5-1.5"/><path d="M5 5.5a3.5 3.5 0 015 5"/><circle cx="8" cy="8" r="1"/></svg>';
+const EDIT = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M11.5 3.5l1 1L8.5 9.5 6.5 9l2-2 3-3z"/><path d="M12.5 2.5l1 1 1-1-1-1z"/></svg>';
+const DELETE = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 4h10M5 4V2h6v2M6 4v10M10 4v10M3 4v10a2 2 0 002 2h8a2 2 0 002-2V4"/></svg>';
+const CLONE = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3" y="3" width="9" height="9" rx="2"/><rect x="5" y="9" width="9" height="9" rx="2"/></svg>';
+const PLUS_SMALL = '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M7.35 2h1.3v5.35H14v1.3H8.65V14h-1.3V8.65H2v-1.3h5.35z"/></svg>';
 
 /**
  * CSP: scripts only via nonce. Inline styles are allowed because Mermaid writes <style> into its SVGs;
@@ -80,6 +88,12 @@ export function buildSidebarHtml(p: HtmlParts): string {
 <section id="skillSec" class="sec open"><h3 class="sec-h" data-sec="skillSec">Skills</h3><div class="sec-b">
   <div class="sk-sbar"><button class="link" id="skNewSide">＋ New skill</button><button class="link" id="skManageSide">Manage…</button></div>
   <div id="skillList"></div></div></section>
+<section id="serverSec" class="sec open"><h3 class="sec-h" data-sec="serverSec"><span class="icon">${SERVER}</span> Servers</h3><div class="sec-b">
+  <div class="server-bar">
+    <button class="btn sec-btn" id="addServerBtn">＋ Add Server</button>
+  </div>
+  <div id="serverList"></div>
+</div></section>
 <section id="storeSec" class="sec"><h3 class="sec-h" data-sec="storeSec">Storage</h3><div class="sec-b">
   <p class="muted">Checks that every saved session can be read back, repairs what it can, and runs a write → read → compare self-test.</p>
   <button class="btn sec-btn" id="verifyBtn">Check storage</button><div id="verify"></div></div></section>

@@ -143,8 +143,85 @@
   $('skNewSide').onclick = () => post({ type: 'manageSkills', view: 'new' });
   $('skManageSide').onclick = () => post({ type: 'manageSkills' });
 
+  /* ---------- servers ---------- */
+  function renderServerList() {
+    const servers = data.servers || [];
+    const box = $('serverList');
+    if (!servers.length) {
+      box.innerHTML = '<div class="muted small">No servers configured. Click "Add Server" to configure MCP servers with secure credentials.</div>';
+      return;
+    }
+    box.innerHTML = servers.map((s, idx) => `
+      <div class="server-row" data-idx="${idx}">
+        <div class="server-header">
+          <span class="server-name">${esc(s.name)}</span>
+          <span class="tag ${s.status || 'connected'}">${s.status || 'connected'}</span>
+        </div>
+        <div class="server-details">
+          <div class="kv"><span>Command</span><b>${esc(s.command)}</b></div>
+          ${s.args && s.args.length ? `<div class="kv"><span>Args</span><b>${esc(s.args.join(' '))}</b></div>` : ''}
+          ${s.env ? renderEnvVars(s.env) : ''}
+        </div>
+        <div class="server-actions">
+          <button class="icon-btn" data-edit="${idx}" title="Edit">${EDIT}</button>
+          <button class="icon-btn" data-clone="${idx}" title="Clone">${CLONE}</button>
+          <button class="icon-btn" data-delete="${idx}" title="Delete">${DELETE}</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderEnvVars(env) {
+    if (!env || !Object.keys(env).length) return '<div class="kv"><span>Environment</span><b class="muted">none</b></div>';
+    return `<div class="kv env-vars"><span>Environment</span><div class="env-list">${Object.entries(env).map(([k, v]) => {
+      const isSecret = /password|token|api[_-]?key|secret/i.test(k);
+      const masked = isSecret ? '••••••••' : esc(v);
+      return `<div class="env-item">
+        <span class="env-key">${esc(k)}</span>
+        <span class="env-value">${masked}</span>
+        ${isSecret ? `<button class="icon-btn toggle-secret" title="Show/Hide">${EYE}</button>` : ''}
+      </div>`;
+    }).join('')}</div></div>`;
+  }
+
+  $('serverList').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    
+    if (btn.dataset.add) {
+      post({ type: 'addServer' });
+    } else if (btn.dataset.edit) {
+      post({ type: 'editServer', idx: Number(btn.dataset.edit) });
+    } else if (btn.dataset.clone) {
+      post({ type: 'cloneServer', idx: Number(btn.dataset.clone) });
+    } else if (btn.dataset.delete) {
+      const idx = Number(btn.dataset.delete);
+      if (confirm(`Delete server "${data.servers[idx]?.name}"?`)) {
+        post({ type: 'deleteServer', idx });
+      }
+    } else if (btn.classList.contains('toggle-secret')) {
+      const item = btn.closest('.env-item');
+      const valueEl = item.querySelector('.env-value');
+      const current = valueEl.textContent;
+      if (current === '••••••••') {
+        const key = item.querySelector('.env-key').textContent;
+        const serverIdx = item.closest('.server-row').dataset.idx;
+        const server = data.servers[serverIdx];
+        if (server && server.env && server.env[key]) {
+          valueEl.textContent = server.env[key];
+          btn.innerHTML = EYE_OFF;
+        }
+      } else {
+        valueEl.textContent = '••••••••';
+        btn.innerHTML = EYE;
+      }
+    }
+  });
+
+  $('addServerBtn').onclick = () => post({ type: 'addServer' });
+
   window.addEventListener('message', ({ data: m }) => {
-    if (m.type === 'data') { data = m; renderLlm(); renderSessions(); renderSkillList(); }
+    if (m.type === 'data') { data = m; renderLlm(); renderSessions(); renderSkillList(); renderServerList(); }
     else if (m.type === 'verifying') { $('verify').innerHTML = '<div class="muted">Checking…</div>'; }
     else if (m.type === 'verifyResult') { renderVerify(m); }
   });

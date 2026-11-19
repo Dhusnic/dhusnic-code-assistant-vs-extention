@@ -642,4 +642,65 @@ export class Hub {
   }
 
   openPanelIds(): string[] { return [...this.panels.keys()]; }
+
+  /* ------------------------------------------------------------ server management */
+
+  async getServerList(): Promise<Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; status?: string }>> {
+    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
+    return Object.entries(servers).map(([name, cfg]) => ({
+      name,
+      command: cfg.command,
+      args: cfg.args,
+      env: cfg.env,
+      status: this.mcp.status().find((s) => s.name === name)?.status
+    }));
+  }
+
+  async addServer(name: string, command: string, args: string[], env: Record<string, string>): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
+    servers[name] = { command, args, env };
+    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
+    await this.loadMcp();
+  }
+
+  async updateServer(idx: number, name: string, command: string, args: string[], env: Record<string, string>): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
+    const keys = Object.keys(servers);
+    const oldName = keys[idx];
+    delete servers[oldName];
+    servers[name] = { command, args, env };
+    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
+    await this.loadMcp();
+  }
+
+  async deleteServer(idx: number): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
+    const keys = Object.keys(servers);
+    const name = keys[idx];
+    delete servers[name];
+    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
+    await this.loadMcp();
+  }
+
+  async cloneServer(idx: number, newName: string): Promise<void> {
+    const servers = this.cfg.get<Record<string, any>>('mcpServers', {});
+    const keys = Object.keys(servers);
+    const oldName = keys[idx];
+    const cfg = servers[oldName];
+    servers[newName] = { ...cfg };
+    await this.cfg.update('mcpServers', servers, vscode.ConfigurationTarget.Global);
+    await this.loadMcp();
+  }
+
+  async getSecret(key: string): Promise<string | undefined> {
+    return await this.ctx.secrets.get(key);
+  }
+
+  async storeSecret(key: string, value: string): Promise<void> {
+    await this.ctx.secrets.store(key, value);
+  }
+
+  async deleteSecret(key: string): Promise<void> {
+    await this.ctx.secrets.delete(key);
+  }
 }

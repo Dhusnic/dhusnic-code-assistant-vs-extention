@@ -102,6 +102,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('infraonAssistant.editMemory', async () => (await workbench()).editMemory(await hub())),
     vscode.commands.registerCommand('infraonAssistant.openPermissions', async () => (await workbench()).editPermissions(await hub())),
     vscode.commands.registerCommand('infraonAssistant.manageSchedules', async () => (await (await hub()).getScheduler()).manage()),
+    vscode.commands.registerCommand('infraonAssistant.manageServers', async () => {
+      await vscode.commands.executeCommand('infraonAssistant.sessions.focus');
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('infraonAssistant.inlineCompletions')) { refreshStatus(); } }),
   );
   // The scheduler loads only in workspaces that actually have scheduled tasks.
