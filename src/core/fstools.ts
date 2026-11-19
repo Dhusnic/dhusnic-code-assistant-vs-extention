@@ -48,7 +48,7 @@ export function remoteShellHint(command: unknown): string | undefined {
   const text = String(command ?? '');
   if (!/(^|[;&|(\s])(ssh|scp|sftp|sshpass|plink|pscp)(\.exe)?(\s|$)/i.test(text)) { return undefined; }
   return 'ssh, scp and sftp cannot be used through run_command: they wait for a password prompt that nobody can answer. '
-    + 'Use list_servers and remote_exec (or remote_upload / remote_download) instead. If the server is not listed, ask the user to add it in the Infraon sidebar under Servers, then continue.';
+    + 'Use list_servers and remote_exec (or remote_upload / remote_download) instead. If the server is not saved yet, call connect_server with its address: the user enters the credentials in a secure prompt and the server is saved.';
 }
 
 export function runShell(command: string, ctx: ToolCtx, timeoutMs = 120000): Promise<string> {

@@ -19,7 +19,7 @@ export interface LinuxInput { name: string; host: string; port: number; user: st
 const STATE_KEY = 'linuxServers';
 /** MCP names become part of tool names, so they stay strict. Linux server names are labels and may contain spaces. */
 const MCP_NAME_RE = /^[A-Za-z0-9][\w.-]{0,63}$/;
-const LINUX_NAME_RE = /^[A-Za-z0-9](?:[\w .-]{0,62}[\w.-])?$/;
+const LINUX_NAME_RE = /^[A-Za-z0-9](?:[\w .@-]{0,62}[\w.-])?$/;
 
 /** A validation problem tied to one field of the server dialog, so the dialog can highlight it. */
 export class FieldError extends Error {
@@ -29,7 +29,7 @@ export class FieldError extends Error {
 export function validateServerName(kind: ServerKind, name: string): string | undefined {
   if (!name) { return 'Enter a name for the server.'; }
   if (kind === 'mcp') { return MCP_NAME_RE.test(name) ? undefined : 'MCP server names can use letters, digits, dots, dashes and underscores, with no spaces (up to 64 characters).'; }
-  return LINUX_NAME_RE.test(name) ? undefined : 'Server names can use letters, digits, spaces, dots, dashes and underscores (up to 64 characters), and must start and end with a letter or digit.';
+  return LINUX_NAME_RE.test(name) ? undefined : 'Server names can use letters, digits, spaces, dots, dashes, underscores and @ (up to 64 characters), and must start and end with a letter or digit.';
 }
 const HOST_RE = /^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252}))$/;
 const USER_RE = /^[A-Za-z0-9_][\w.-]{0,63}$/;

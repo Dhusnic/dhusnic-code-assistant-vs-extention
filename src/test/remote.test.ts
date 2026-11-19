@@ -1,4 +1,4 @@
-import { catastrophicReason, resolveServer, unknownServerMessage } from '../core/remoteTools';
+import { catastrophicReason, parseHostSpec, resolveServer, unknownServerMessage } from '../core/remoteTools';
 import { after, before, describe, it } from 'node:test';
 import * as assert from 'assert/strict';
 import * as fs from 'fs/promises';
@@ -487,5 +487,19 @@ describe('commands that could wreck a server', () => {
       'grep shutdown /var/log/syslog', 'docker compose up -d', 'dd if=/dev/zero of=/tmp/test bs=1M count=1', 'chmod -R 755 /opt/app']) {
       assert.equal(catastrophicReason(c), undefined, c);
     }
+  });
+});
+
+describe('reading a server address', () => {
+  it('splits user@host:port, keeps explicit values, and handles IPv6 and ssh:// forms', () => {
+    assert.deepEqual(parseHostSpec('10.0.5.97'), { host: '10.0.5.97', user: undefined, port: 22 });
+    assert.deepEqual(parseHostSpec('root@10.0.5.97'), { host: '10.0.5.97', user: 'root', port: 22 });
+    assert.deepEqual(parseHostSpec('root@10.0.5.97:2222'), { host: '10.0.5.97', user: 'root', port: 2222 });
+    assert.deepEqual(parseHostSpec('ssh://deploy@app.internal/'), { host: 'app.internal', user: 'deploy', port: 22 });
+    assert.deepEqual(parseHostSpec('[fe80::1]:2200', 'admin'), { host: 'fe80::1', user: 'admin', port: 2200 });
+    assert.deepEqual(parseHostSpec('root@10.0.5.97', 'ubuntu', 2022), { host: '10.0.5.97', user: 'ubuntu', port: 2022 });
+  });
+  it('points the agent to connect_server for an address that is not saved', () => {
+    assert.match(unknownServerMessage([], '10.0.4.110'), /call connect_server/);
   });
 });

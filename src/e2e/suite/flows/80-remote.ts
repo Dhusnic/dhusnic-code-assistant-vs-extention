@@ -90,3 +90,48 @@ flows.push({
     }
   },
 });
+
+flows.push({
+  name: 'connect-server-asks-for-credentials-securely-retries-and-saves-the-server',
+  timeoutMs: 60_000,
+  async run(t) {
+    if (!findShell()) { throw new Error('no bash found for the test SSH server'); }
+    const ssh = await startSshServer({ user: 'deploy', password: PASSWORD });
+    const original = t.hub.remote.prompts;
+    const asked: string[] = [];
+    const answers = ['deploy', 'wrong-password', PASSWORD];
+    t.hub.remote.prompts = { input: async (o: any) => { asked.push(o.password ? 'password' : 'user'); return answers.shift(); }, pickKeyFile: async () => undefined };
+    const saved = () => t.hub.servers.linuxSync().find((s: any) => s.host === '127.0.0.1' && s.port === ssh.port);
+    try {
+      await t.hub.ctx.globalState.update('sshHostKeys', { ...t.hub.ctx.globalState.get('sshHostKeys', {}), [`127.0.0.1:${ssh.port}`]: ssh.hostKeyFingerprint });
+      const s = await t.newSession();
+      await s.click('#modePill');
+      await s.clickText('.menu .item', 'Auto-execute');
+      await t.gw.script(
+        callTool('connect_server', { host: `127.0.0.1:${ssh.port}` }),
+        callTool('remote_exec', { server: '127.0.0.1', command: 'echo saved-and-working' }),
+        reply('Connected and checked.'),
+      );
+      await s.send(`ssh into 127.0.0.1 port ${ssh.port} and check it`);
+      await s.waitFor('.msg.assistant .md', { text: 'Connected and checked.', timeoutMs: 30_000 });
+      assert.deepEqual(asked, ['user', 'password', 'password'], 'asks the user name, then the password again after a wrong one');
+      const server = saved();
+      assert.ok(server, 'the server was saved automatically');
+      assert.equal(server.user, 'deploy');
+      assert.equal((await t.hub.servers.credentials(server.name)).password, PASSWORD);
+      const sent = JSON.stringify((await t.gw.requests()).map((r: any) => r.messages));
+      assert.ok(!sent.includes(PASSWORD) && !sent.includes('wrong-password'), 'no password ever reaches the LLM');
+      const tools = (await t.gw.last()).messages.filter((m: any) => m.role === 'tool').map((m: any) => String(m.content));
+      assert.ok(tools.some((c: string) => /Saved as "deploy@127\.0\.0\.1"/.test(c)));
+      assert.ok(tools.some((c: string) => /saved-and-working/.test(c)));
+      await t.shot('connected-and-saved');
+      await s.click('#modePill');
+      await s.clickText('.menu .item', 'Ask before edits');
+    } finally {
+      t.hub.remote.prompts = original;
+      const server = saved();
+      if (server) { await t.hub.servers.remove('linux', server.name); t.hub.remote.pool.close(server.name); }
+      await ssh.close();
+    }
+  },
+});

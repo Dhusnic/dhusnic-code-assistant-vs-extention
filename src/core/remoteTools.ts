@@ -35,12 +35,28 @@ export function resolveServer<T extends { name: string; host: string; user: stri
   return byAddress.length === 1 ? byAddress[0] : undefined;
 }
 
+/** Splits "user@host:port" (each part optional except the host). IPv6 addresses go in brackets: [::1]:22. */
+export function parseHostSpec(spec: unknown, user?: unknown, port?: unknown): { host: string; user?: string; port: number } {
+  let s = String(spec ?? '').trim().replace(/^ssh:\/\//i, '').replace(/\/+$/, '');
+  let u = typeof user === 'string' && user.trim() ? user.trim() : undefined;
+  const at = s.lastIndexOf('@');
+  if (at > 0) { u ??= s.slice(0, at); s = s.slice(at + 1); }
+  let p = Number(port) || 22;
+  const v6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(s);
+  if (v6) { s = v6[1]; if (v6[2] && !Number(port)) { p = Number(v6[2]); } }
+  else {
+    const m = /^([^:]+):(\d+)$/.exec(s);
+    if (m) { s = m[1]; if (!Number(port)) { p = Number(m[2]); } }
+  }
+  return { host: s, user: u, port: p };
+}
+
 /** What the agent is told when no saved server matches, so it can suggest the right one instead of asking for a password. */
 export function unknownServerMessage(servers: Array<{ name: string; host: string; user: string; port: number }>, query: unknown): string {
   const q = String(query ?? '').trim();
   const list = servers.map((s) => `"${s.name}" (${s.user}@${s.host}:${s.port})`).join(', ');
   return `No saved server matches "${q}". ${list ? `Saved servers: ${list}. If one of these is what the user meant (for example a similar address), ask the user to confirm before using it.` : 'No servers are saved yet.'} `
-    + 'Otherwise ask the user to add the server in the Infraon sidebar (Servers → Add server) and then continue. Never ask the user to type a password or private key in the chat.';
+    + 'Otherwise call connect_server with the address (and the user name if the user gave one): it asks the user for the credentials in a secure VS Code prompt, tests the connection and saves the server. Never ask the user to type a password or private key in the chat.';
 }
 
 const POWER = new Set(['reboot', 'shutdown', 'poweroff', 'halt']);
@@ -78,7 +94,7 @@ const MAX_JOBS = 20;
 
 const GUIDE = `Runs a shell command on a configured Linux server over SSH (never use run_command with ssh, scp or sshpass: they cannot authenticate here).
 How to work on servers like an experienced operator:
-- Start with list_servers to see the saved servers (name, user@host) and their notes (paths, service names, health URLs). A server can be given by its name or its IP address. Credentials are already saved: never ask the user for a password or key in the chat. If the address the user gave is not saved, show the saved servers and ask whether they meant one of them, or ask them to add it in the sidebar.
+- Start with list_servers to see the saved servers (name, user@host) and their notes (paths, service names, health URLs). A server can be given by its name or its IP address. Credentials are already saved: never ask the user for a password or key in the chat. If the address the user gave is not saved and is not a typo of a saved one, call connect_server: it asks the user for the credentials securely, tests the connection and saves the server, then continue with remote_exec.
 - Look before you change: check state first (systemctl status, docker ps, df -h, free -m, git -C <dir> log -1, ls).
 - Commands run non-interactively: never start editors, pagers or prompts (use --no-pager, -y, DEBIAN_FRONTEND=noninteractive). If a tool is missing from PATH, run it through bash -lc '...'.
 - sudo: use "sudo -S -p '' <command>" and set use_sudo_password: true; the stored password is supplied privately and you never see it.

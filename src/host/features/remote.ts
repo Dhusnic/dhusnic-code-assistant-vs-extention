@@ -1,10 +1,20 @@
 import * as vscode from 'vscode';
-import { RemoteHost, RemoteServerInfo, createRemoteTools, resolveServer } from '../../core/remoteTools';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import { RemoteHost, RemoteServerInfo, createRemoteTools, parseHostSpec, resolveServer } from '../../core/remoteTools';
 import { HostKeyInfo, SshPool, SshTarget } from '../../core/ssh';
-import { Tool } from '../../core/tool';
-import type { ServerRegistry } from './servers';
+import { Tool, fnSpec } from '../../core/tool';
+import { ServerRegistry, checkLinux } from './servers';
 
 const HOST_KEYS = 'sshHostKeys';
+const MAX_ATTEMPTS = 3;
+
+/** The prompts connect_server shows; replaceable so the UI tests can answer them. */
+export interface ConnectPrompts {
+  input(o: vscode.InputBoxOptions, token: vscode.CancellationToken): Thenable<string | undefined>;
+  pickKeyFile(): Thenable<vscode.Uri[] | undefined>;
+}
 
 export interface RemoteDeps {
   ctx: vscode.ExtensionContext;
@@ -21,6 +31,11 @@ export interface RemoteDeps {
 export class RemoteService implements vscode.Disposable {
   readonly pool: SshPool;
   private toolset?: ReturnType<typeof createRemoteTools>;
+  private connectToolDef?: Tool;
+  prompts: ConnectPrompts = {
+    input: (o, token) => vscode.window.showInputBox(o, token),
+    pickKeyFile: () => vscode.window.showOpenDialog({ canSelectMany: false, openLabel: 'Use this private key', title: 'Choose your SSH private key', defaultUri: vscode.Uri.file(path.join(os.homedir(), '.ssh')) }),
+  };
 
   constructor(private deps: RemoteDeps) {
     this.pool = new SshPool({ verifyHostKey: (i) => this.verifyHostKey(i), onStatus: () => deps.onStatus() });
@@ -83,11 +98,99 @@ export class RemoteService implements vscode.Disposable {
     };
   }
 
-  /** The remote tools, offered only while at least one Linux server is saved (no token cost otherwise). */
+  /** connect_server is always offered, so the agent can add the first server; the rest once a server is saved. */
   tools(): Tool[] {
-    if (!this.deps.servers.linuxSync().length) { return []; }
+    this.connectToolDef ??= this.connectTool();
+    if (!this.deps.servers.linuxSync().length) { return [this.connectToolDef]; }
     this.toolset ??= createRemoteTools(this.host());
-    return this.toolset.tools;
+    return [...this.toolset.tools, this.connectToolDef];
+  }
+
+  private connectTool(): Tool {
+    return {
+      kind: 'meta',
+      spec: fnSpec('connect_server', 'Connect to a Linux server that is not saved yet. VS Code asks the user for the user name (if you do not pass it) and the password or private key in a secure prompt that you never see, tests the connection, and saves the server so remote_exec and the other remote tools can use it. Use it whenever the user asks you to work on a server address that list_servers does not show. Never ask for the password in the chat, even if the user offers it: this prompt is the safe way.', {
+        host: { type: 'string', description: 'IP address or host name; user@host and host:port also work.' },
+        user: { type: 'string', description: 'User name, if the user said it (for example root).' },
+        port: { type: 'number', description: 'SSH port (default 22).' },
+        name: { type: 'string', description: 'Optional name to save it under (default: the address).' },
+        notes: { type: 'string', description: 'Optional notes for later work: app folder, service names, health check.' },
+      }, ['host']),
+      describe: (a) => { const h = parseHostSpec(a.host, a.user, a.port); return `Connect to ${h.user ? `${h.user}@` : ''}${h.host} (you enter the credentials)`; },
+      run: (a, ctx) => this.connectAndSave(a, ctx.signal),
+    };
+  }
+
+  /** Asks the user for credentials, tests them (up to three tries) and saves the server on success. */
+  async connectAndSave(a: any, signal: AbortSignal): Promise<string> {
+    const spec = parseHostSpec(a.host, a.user, a.port);
+    const servers = this.deps.servers;
+    const already = resolveServer(servers.linuxSync(), spec.user ? `${spec.user}@${spec.host}` : spec.host);
+    if (already && (!spec.user || already.user === spec.user) && already.port === spec.port) {
+      return `${already.user}@${already.host}:${already.port} is already saved as "${already.name}". Use server "${already.name}" with remote_exec.`;
+    }
+    const cts = new vscode.CancellationTokenSource();
+    const onAbort = () => cts.cancel();
+    signal.addEventListener('abort', onAbort, { once: true });
+    const cancelled = () => (signal.aborted ? 'Cancelled.' : `The user cancelled connecting to ${spec.host}. Ask how they want to continue.`);
+    try {
+      const probe = checkLinux({ name: 'x', host: spec.host, port: spec.port, user: spec.user ?? 'root', auth: 'password', password: 'x', env: {} }, false);
+      if (probe && probe.field !== 'user') { throw new Error(`${probe.message} (${String(a.host)})`); }
+      let user = spec.user;
+      if (!user) {
+        user = (await this.prompts.input({
+          title: `Connect to ${spec.host}:${spec.port}`, prompt: 'User name for SSH', value: 'root', ignoreFocusOut: true,
+          validateInput: (v) => (checkLinux({ name: 'x', host: spec.host, port: spec.port, user: v.trim(), auth: 'password', password: 'x', env: {} }, false)?.field === 'user' ? 'Enter a valid user name.' : undefined),
+        }, cts.token))?.trim();
+        if (!user) { return cancelled(); }
+      }
+      let problem = '';
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const password = await this.prompts.input({
+          title: `Connect to ${user}@${spec.host}:${spec.port}${attempt > 1 ? ` (try ${attempt} of ${MAX_ATTEMPTS})` : ''}`,
+          prompt: problem || 'Password. Leave empty to use a private key file instead. It is stored in encrypted storage and never shown to the AI.',
+          password: true, ignoreFocusOut: true,
+        }, cts.token);
+        if (password === undefined) { return cancelled(); }
+        let key: string | undefined, passphrase: string | undefined;
+        if (!password) {
+          const files = await this.prompts.pickKeyFile();
+          if (!files?.length) { return cancelled(); }
+          key = await fs.readFile(files[0].fsPath, 'utf8');
+          if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(key)) { problem = `${path.basename(files[0].fsPath)} is not a private key file. Try again.`; continue; }
+          if (/ENCRYPTED/.test(key) || /bcrypt/.test(Buffer.from(key.replace(/-----[^-]+-----|\s/g, ''), 'base64').toString('latin1'))) {
+            passphrase = await this.prompts.input({ title: 'Key passphrase', prompt: 'This key is protected by a passphrase.', password: true, ignoreFocusOut: true }, cts.token);
+            if (passphrase === undefined) { return cancelled(); }
+          }
+        }
+        if (password) { this.deps.addKnownSecret(password, 'server_password'); }
+        let out: string;
+        try {
+          out = await this.test({ name: spec.host, host: spec.host, port: spec.port, user, password: password || undefined, privateKey: key, passphrase });
+        } catch (e: any) {
+          const msg = String(e?.message ?? e);
+          if (/Authentication/i.test(msg) && attempt < MAX_ATTEMPTS) { problem = `That ${key ? 'key' : 'password'} was not accepted for ${user}@${spec.host}. Try again.`; continue; }
+          return `Could not connect to ${user}@${spec.host}:${spec.port}: ${msg} Nothing was saved.`;
+        }
+        const name = this.freeName(String(a.name ?? '').trim() || `${user}@${spec.host}`);
+        await servers.saveLinux(undefined, { name, host: spec.host, port: spec.port, user, auth: key ? 'key' : 'password', password: password || undefined, key, passphrase, env: {}, notes: typeof a.notes === 'string' ? a.notes : undefined });
+        this.deps.onStatus();
+        void vscode.window.showInformationMessage(`Saved the server "${name}" (${user}@${spec.host}). Its credentials are in encrypted storage.`);
+        return `Connected: ${out}\nSaved as "${name}" (${user}@${spec.host}:${spec.port}). Use server "${name}" (or its IP) with remote_exec. The credentials are stored securely and you never see them.`;
+      }
+      return `The credentials for ${user}@${spec.host} were not accepted ${MAX_ATTEMPTS} times. Nothing was saved.`;
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+      cts.dispose();
+    }
+  }
+
+  /** A server name that is not taken yet. */
+  private freeName(wanted: string): string {
+    const clean = wanted.replace(/[^\w .@-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 60) || 'server';
+    const taken = new Set(this.deps.servers.linuxSync().map((s) => s.name.toLowerCase()));
+    if (!taken.has(clean.toLowerCase())) { return clean; }
+    for (let i = 2; ; i++) { const n = `${clean}-${i}`; if (!taken.has(n.toLowerCase())) { return n; } }
   }
 
   /** The saved name of the server a tool call refers to (by name, IP or user@host). */
