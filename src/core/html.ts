@@ -109,7 +109,7 @@ export function buildSidebarHtml(p: HtmlParts): string {
       <div class="muted small">The program and its arguments. Quote an argument that contains spaces.</div>
     </div>
     <div id="linuxFields">
-      <div class="sv-row"><div><label for="serverHost">IP or host name</label><input id="serverHost" placeholder="192.168.1.100" autocomplete="off"></div>
+      <div class="sv-row"><div><label for="serverHost">Host or IP</label><input id="serverHost" placeholder="192.168.1.100" autocomplete="off"></div>
         <div class="sv-port"><label for="serverPort">Port</label><input id="serverPort" type="number" value="22" min="1" max="65535"></div></div>
       <label for="serverUser">User name</label>
       <input id="serverUser" placeholder="ubuntu" autocomplete="off">

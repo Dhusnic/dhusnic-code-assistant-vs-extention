@@ -2,7 +2,7 @@
     "name": "infraon-code-assistant",
     "displayName": "Infraon Code Assistant",
     "description": "Agentic AI coding assistant powered by the company-hosted LLM",
-    "version": "0.19.1",
+    "version": "0.19.3",
     "publisher": "infraon",
     "engines": {
         "vscode": "^1.90.0"

@@ -603,3 +603,10 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
 
 /* server dialog: the field a validation error belongs to */
 .sv-form .invalid, .sv-form .invalid:focus { outline: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); outline-offset: -1px; }
+
+/* Dialogs never grow past the window: the form scrolls and the buttons stay visible. */
+.modal .mcard { max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; }
+#serverDialog .mcard { display: flex; flex-direction: column; overflow: hidden; }
+#serverDialog .mtitle, #serverDialog .actions, #serverDialog #serverTest { flex: 0 0 auto; }
+#serverDialog .sv-form { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; margin-right: -6px; }
+#serverDialog .actions { padding-top: 8px; border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent)); }
