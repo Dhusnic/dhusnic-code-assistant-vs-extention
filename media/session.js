@@ -291,7 +291,12 @@
   const dur = (ms) => (ms === undefined || ms === null || ms < 0 ? '' : ms < 1000 ? `${ms}ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
   /** When the agent stopped while a step was still in_progress: that step's clock and spinner freeze there. */
   let todoPausedAt = 0;
-  const stepTime = (t) => (t.status === 'completed' && t.startedAt && t.finishedAt ? dur(t.finishedAt - t.startedAt) : t.status === 'in_progress' && t.startedAt ? dur((busy ? Date.now() : todoPausedAt || Date.now()) - t.startedAt) : '');
+  /** Time each step spent paused (agent stopped while it was in progress), keyed by step and start time. */
+  const pausedMs = new Map();
+  const pauseKey = (t) => `${t.content}|${t.startedAt}`;
+  const pausedFor = (t) => pausedMs.get(pauseKey(t)) || 0;
+  const workedMs = (t) => (t.status === 'completed' && t.startedAt && t.finishedAt ? t.finishedAt - t.startedAt - pausedFor(t) : undefined);
+  const stepTime = (t) => (workedMs(t) !== undefined ? dur(workedMs(t)) : t.status === 'in_progress' && t.startedAt ? dur((busy ? Date.now() : todoPausedAt || Date.now()) - t.startedAt - pausedFor(t)) : '');
   setInterval(() => { if (busy && lastTodos && lastTodos.some((t) => t.status === 'in_progress') && $('todo-card')) { renderTodos(lastTodos); } }, 1000);
   function renderTodos(items) {
     lastTodos = items;
@@ -302,7 +307,7 @@
     if (!card) { clearEmpty(); card = document.createElement('div'); card.className = 'todo-card'; card.id = 'todo-card'; log.appendChild(card); cur = null; }
     const done = items.filter((t) => t.status === 'completed').length;
     const icon = (s) => (s === 'completed' ? '<span class="ti done">✓</span>' : s === 'in_progress' ? (busy ? '<span class="ti run"></span>' : '<span class="ti paused" title="The agent is not running: this step was left in progress"></span>') : '<span class="ti todo"></span>');
-    const total = items.reduce((ms, t) => ms + (t.status === 'completed' && t.startedAt && t.finishedAt ? t.finishedAt - t.startedAt : 0), 0);
+    const total = items.reduce((ms, t) => ms + (workedMs(t) ?? 0), 0);
     card.innerHTML = `<div class="th"><b>Tasks</b><span class="muted">${done} of ${items.length} done${total ? ` · ${dur(total)}` : ''}</span><div class="tbar2"><div style="width:${items.length ? (done / items.length) * 100 : 0}%"></div></div></div>`
       + items.map((t, i) => {
         const open = openSteps.has(t.content);
@@ -1077,7 +1082,13 @@
   function setBusy(b) {
     const was = busy;
     busy = b;
-    if (was !== b) { todoPausedAt = b ? 0 : Date.now(); if (lastTodos && $('todo-card')) { renderTodos(lastTodos); } } $('stop').style.display = b ? 'grid' : 'none';
+    if (was !== b) {
+      // Resuming: the time the open step spent paused is not work time.
+      if (b && todoPausedAt && lastTodos) {
+        for (const t of lastTodos) { if (t.status === 'in_progress' && t.startedAt) { pausedMs.set(pauseKey(t), pausedFor(t) + Math.max(0, Date.now() - Math.max(todoPausedAt, t.startedAt))); } }
+      }
+      todoPausedAt = b ? 0 : Date.now();
+      if (lastTodos && $('todo-card')) { renderTodos(lastTodos); } } $('stop').style.display = b ? 'grid' : 'none';
     $('send').title = b ? 'Queue message: the agent reads it at its next step (Enter)' : 'Send (Enter)';
     input.placeholder = b ? 'Agent is working: type to queue a message (it is read at the next step)' : IDLE_PLACEHOLDER;
   }

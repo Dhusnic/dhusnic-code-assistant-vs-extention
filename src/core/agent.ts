@@ -427,13 +427,18 @@ export class Agent {
     }
     const signal = this.abort?.signal ?? new AbortController().signal;
     try {
+      // The latest task list survives the summary, so reminders about unfinished steps keep working afterwards.
+      const { todos } = this.todoState();
+      const carry = todos && unfinishedTodos(todos).length
+        ? { call: { id: `todo_carry_${Date.now().toString(36)}`, type: 'function' as const, function: { name: TODO_TOOL, arguments: JSON.stringify({ todos }) } }, result: formatTodos(todos) }
+        : undefined;
       const res = await compactHistory(pruned, this.turnStarts, async (text) => {
         const cfg = { ...(await this.deps.getConfig(opts)), temperature: 0.1, maxTokens: 2048 };
         const sent: ChatMessage[] = [{ role: 'system', content: SUMMARY_SYSTEM }, { role: 'user', content: text }];
         const out = await this.deps.llm(cfg, sent, [], () => {}, signal);
         ui.spent?.(tokensSpent(out, sent));
         return out.content;
-      });
+      }, carry);
       this.history = res.summarized ? res.history : pruneToolOutputs(this.history, 2, 600);
       if (res.summarized) { this.turnStarts = res.turnStarts; }
     } catch (e: any) {
@@ -676,7 +681,16 @@ export class Agent {
           if (last?.role === 'tool') { last.content = `${last.content ?? ''}\n\n${nudge}`; }
         }
       }
-      ui.info(`Stopped after ${ep.maxIterations} tool rounds. Send "continue" to let the agent carry on (or raise Max Iterations in settings).`);
+      // Hitting the round limit also ends the turn: settle open steps on the next turn, as a normal ending would.
+      // The reminder goes into the last tool result (as todoNudge does), so no extra user message is added.
+      let openSteps = 0;
+      if (!this.deps.subagent && run.mode !== 'plan') {
+        const { todos } = this.todoState();
+        const last = this.history[this.history.length - 1];
+        openSteps = todos ? unfinishedTodos(todos).length : 0;
+        if (todos && openSteps && last?.role === 'tool') { last.content = `${last.content ?? ''}\n\n<system-reminder>${todoEndReminder(todos)}</system-reminder>`; }
+      }
+      ui.info(`Stopped after ${ep.maxIterations} tool rounds${openSteps ? ` with ${openSteps} task step${openSteps === 1 ? '' : 's'} still open` : ''}. Send "continue" to let the agent carry on (or raise Max Iterations in settings).`);
       this.reportVerification(ui);
     } catch (e: any) {
       if (e.message !== 'Cancelled') { throw e; }
