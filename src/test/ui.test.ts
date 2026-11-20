@@ -80,6 +80,8 @@ test('manifest: sidebar view, tab serializer activation, commands and icon are w
   for (const c of cmds) { assert.ok(ext.includes(`'${c}'`), `${c} declared but not registered`); }
   assert.ok(fs.existsSync(path.join(ROOT, 'scripts', 'ocr.ps1')), 'OCR script ships with the extension');
   assert.doesNotMatch(fs.readFileSync(path.join(ROOT, '.vscodeignore'), 'utf8'), /^scripts/m);
+  // Release output (signed update files, zips handed to IT) must never be packed into the extension itself.
+  for (const p of ['dist/**', 'server/**', '*.vsix', '*.zip']) { assert.match(fs.readFileSync(path.join(ROOT, '.vscodeignore'), 'utf8'), new RegExp(`^${p.replace(/[.*]/g, '\\$&')}\\r?$`, 'm'), p); }
 });
 
 test('md: escapes HTML and script injection', () => {
