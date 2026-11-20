@@ -424,7 +424,7 @@ export class Hub {
       // An agent in its own worktree works outside the workspace: workspace changes and folders are not its own.
       fileChanges: root === this.root ? this.journal : undefined,
       roots: root === this.root ? () => this.workspaceRoots() : undefined,
-      limits: () => ({ maxIterations: this.cfg.get<number>('maxIterations', 0), maxTokens: this.cfg.get<number>('maxOutputTokens', 0) }),
+      limits: () => ({ maxIterations: this.cfg.get<number>('maxIterations', 1200), maxTokens: this.cfg.get<number>('maxOutputTokens', 0) }),
       snapshot: (turn, abs) => checkpoints.snapshot(turn, abs),
       restore: (turn) => checkpoints.restore(turn),
       contextLimit: () => this.contextWindow(),

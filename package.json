@@ -169,8 +169,8 @@
                 },
                 "infraonAssistant.maxIterations": {
                     "type": "number",
-                    "default": 0,
-                    "description": "Max tool-call rounds per request. 0 uses the effort level's value (low 15, medium 50, high 80, max 120)."
+                    "default": 1200,
+                    "description": "Max tool-call rounds per request (default 1200, enough to build a mid-size project in one go). 0 uses the effort level's value instead (low 15, medium 50, high 80, max 120)."
                 },
                 "infraonAssistant.maxOutputTokens": {
                     "type": "number",
@@ -556,7 +556,8 @@
         "package": "vsce package",
         "test": "tsc -p . && node --test \"out/test/*.test.js\" && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
         "test:e2e": "tsc -p . && node out/e2e/run.js",
-        "eval": "tsc -p . && node out/eval/run.js"
+        "eval": "tsc -p . && node out/eval/run.js",
+        "e2e:build": "tsc -p . && node out/eval/buildProject.js"
     },
     "devDependencies": {
         "@types/node": "^20.0.0",

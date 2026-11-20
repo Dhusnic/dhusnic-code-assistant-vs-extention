@@ -59,6 +59,31 @@ export function finishAction(todos: TodoItem[], toolId: string, ok: boolean, now
   return false;
 }
 
+/**
+ * After this many tool rounds without a todo_write while steps are unfinished, the model is reminded to update the list.
+ * Without it, models routinely build the list once and then work through every step without touching it again, so the
+ * UI shows step 1 "in progress" for the whole run with every action piled under it.
+ */
+export const TODO_REMINDER_ROUNDS = 5;
+
+export const unfinishedTodos = (todos: TodoInput[]): TodoInput[] => todos.filter((t) => t.status !== 'completed');
+
+const listLines = (todos: TodoInput[]): string => todos.map((t, i) => `${i + 1}. [${t.status}] ${t.content}`).join('\n');
+
+/** Appended to a tool result when the list has gone stale. */
+export function todoReminder(todos: TodoInput[], rounds: number): string {
+  return `<system-reminder>You have done ${rounds} rounds of tool calls since you last updated the task list, and it still reads:\n${listLines(todos)}\n`
+    + `If the work you did finished the step that is in_progress (or later ones), call todo_write NOW: mark each finished step completed and the step you are working on in_progress. Keep exactly one step in_progress. Do not mention this reminder to the user.</system-reminder>`;
+}
+
+/** Sent once when the model ends its turn while steps are still open. */
+export function todoEndReminder(todos: TodoInput[]): string {
+  const open = unfinishedTodos(todos);
+  return `You are ending your turn, but the task list still has ${open.length} unfinished step${open.length === 1 ? '' : 's'}:\n${listLines(todos)}\n\n`
+    + 'If those steps are done, call todo_write now and mark them completed. If work remains, continue with it. '
+    + 'If you are stopping on purpose (blocked, or waiting for the user), mark the finished steps completed and say briefly why you are stopping.';
+}
+
 /** Tool result: progress plus a nudge to keep the list accurate. */
 export function formatTodos(todos: TodoInput[]): string {
   const done = todos.filter((t) => t.status === 'completed').length;
