@@ -1,0 +1,23 @@
+Hi team 👋
+
+Infraon Code Assistant (our AI coding assistant in VS Code, running on the company LLM) is now available for Mac too. One script sets everything up.
+
+🍎 Install on macOS (2 minutes)
+1. Download and extract the attached zip: InfraonCodeAssistant-Mac-Installer.zip
+2. Right-click Install-InfraonAssistant.command → Open → Open (first time only, macOS asks for confirmation)
+3. Paste your API key when it asks (that is the only question)
+4. VS Code opens, then click the "Infraon Assistant" icon on the left bar
+
+If step 2 doesn't work: open Terminal, type "bash " (with a space), drag install.sh into the window, press Return.
+
+✅ It installs VS Code if you don't have it, installs the extension and configures it for you.
+
+⚠️ Notes
+• Connect to the office network / VPN first.
+• If VS Code is already open, run Cmd+Shift+P → "Developer: Reload Window" once.
+• Don't double-click the .vsix file, only run the .command / install.sh.
+• Don't share your API key in chat. Ask me for yours if you don't have one.
+
+Windows users: use the separate Windows installer zip.
+
+Problems? Reply here with a screenshot of the Terminal window. Thanks!

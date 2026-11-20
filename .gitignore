@@ -52,3 +52,4 @@ temp
 
 # Test fixtures (optional - uncomment if you don't want to commit them)
 # src/test/fixtures
+eval-results/

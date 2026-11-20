@@ -181,7 +181,7 @@ test('unknown type and nested delegation attempts are reported, never crash', as
   });
   const s = h.mgr.newSession();
   await h.mgr.send(s.id, 'a1', 'bad type');
-  assert.match(toolMsgs(h.mgr.agent(s.id, 'a1').agent.history)[0], /unknown agent type "wizard"\. Available types: general-purpose, explore, plan, fork/);
+  assert.match(toolMsgs(h.mgr.agent(s.id, 'a1').agent.history)[0], /unknown agent type "wizard"\. Available types: general-purpose, explore, plan, researcher, fork/);
   await h.mgr.send(s.id, 'a1', 'nest');
   const outer = subs(h, s.id)[0];
   assert.match(toolMsgs(h.mgr.agent(s.id, outer.id).agent.history)[0], /sub-agents cannot start further sub-agents/);
@@ -235,7 +235,8 @@ test('a foreground agent never deadlocks on the concurrency limit (limit 1)', as
 test('sub-agent approvals follow the session mode and are answered on the sub-agent', async () => {
   const h = await harness(async (who, msgs) => {
     if (who.role === 'sub') { return lastIsTool(msgs) ? text('wrote it') : call('write_file', { path: 'from-sub.txt', content: 'hi' }, 'W1'); }
-    return lastIsTool(msgs) ? text('ok') : call(AGENT_TOOL, { description: 'writer', prompt: 'write a file', run_in_background: true }, 'A1');
+    // A finished background agent notifies main; main must not start another writer in reply (that would loop forever).
+    return lastIsTool(msgs) || lastUser(msgs).includes('<agent-notification>') ? text('ok') : call(AGENT_TOOL, { description: 'writer', prompt: 'write a file', run_in_background: true }, 'A1');
   }, { mode: 'ask' });
   const s = h.mgr.newSession();
   await h.mgr.send(s.id, 'a1', 'go');

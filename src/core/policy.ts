@@ -24,10 +24,11 @@ export interface EffortParams { temperature: number; maxTokens: number; maxItera
 
 export function effortParams(effort: Effort): EffortParams {
   switch (effort) {
-    case 'low': return { temperature: 0.1, maxTokens: 2048, maxIterations: 8, hint: 'Be fast and concise. Explore only what is strictly necessary.' };
-    case 'high': return { temperature: 0.2, maxTokens: 8192, maxIterations: 40, hint: 'Explore thoroughly, reason step by step, and verify your changes (run tests or check diagnostics) before finishing.' };
-    case 'max': return { temperature: 0.3, maxTokens: 16384, maxIterations: 60, hint: 'Be exhaustive: investigate broadly, consider edge cases, verify with tests and diagnostics, and re-check your work before finishing.' };
-    default: return { temperature: 0.2, maxTokens: 4096, maxIterations: 25, hint: '' };
+    // Real fix-and-test loops need room: too few rounds stop the agent mid-task, too few tokens cut off large edits.
+    case 'low': return { temperature: 0.1, maxTokens: 4096, maxIterations: 15, hint: 'Be fast and concise. Explore only what is strictly necessary.' };
+    case 'high': return { temperature: 0.2, maxTokens: 16384, maxIterations: 80, hint: 'Explore thoroughly, reason step by step, and verify your changes (run tests or check diagnostics) before finishing.' };
+    case 'max': return { temperature: 0.3, maxTokens: 16384, maxIterations: 120, hint: 'Be exhaustive: investigate broadly, consider edge cases, verify with tests and diagnostics, and re-check your work before finishing.' };
+    default: return { temperature: 0.2, maxTokens: 8192, maxIterations: 50, hint: '' };
   }
 }
 

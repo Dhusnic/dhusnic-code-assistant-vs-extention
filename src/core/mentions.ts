@@ -3,7 +3,11 @@ import * as path from 'path';
 import { resolveSafe } from './fstools';
 
 export interface Mention { raw: string; path: string; start?: number; end?: number }
-export interface Expanded { text: string; files: string[]; missing: string[] }
+export interface Expanded {
+  text: string; files: string[]; missing: string[];
+  /** Absolute paths attached in full (no line range, not truncated): the agent has seen them, so they count as read. */
+  read: string[];
+}
 
 const MENTION_RE = /(^|[\s(])@([\w./\\-]+(?::\d+(?:-\d+)?)?)/g;
 const PER_FILE_MAX = 20000;
@@ -29,6 +33,7 @@ export function extractMentions(text: string): Mention[] {
 export async function expandMentions(text: string, root: string): Promise<Expanded> {
   const files: string[] = [];
   const missing: string[] = [];
+  const read: string[] = [];
   const blocks: string[] = [];
   let total = 0;
   for (const m of extractMentions(text)) {
@@ -43,15 +48,17 @@ export async function expandMentions(text: string, root: string): Promise<Expand
         body = lines.slice(m.start - 1, m.end).join('\n');
         range = ` lines="${m.start}-${m.end}"`;
       }
+      const whole = m.start === undefined && body.length <= PER_FILE_MAX;
       if (body.length > PER_FILE_MAX) { body = `${body.slice(0, PER_FILE_MAX)}\n...[truncated]`; }
       if (total + body.length > TOTAL_MAX) { missing.push(`${m.path} (context budget reached)`); continue; }
+      if (whole) { read.push(abs); }
       total += body.length;
       const rel = path.relative(root, abs).split(path.sep).join('/');
       blocks.push(`<file path="${rel}"${range}>\n${body}\n</file>`);
       files.push(rel);
     } catch { missing.push(m.path); }
   }
-  return { text: blocks.length ? `${text}\n\nAttached files:\n${blocks.join('\n')}` : text, files, missing };
+  return { text: blocks.length ? `${text}\n\nAttached files:\n${blocks.join('\n')}` : text, files, missing, read };
 }
 
 export { filterFiles } from './glob';

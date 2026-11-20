@@ -15,9 +15,17 @@ export interface ToolSpec { type: 'function'; function: { name: string; descript
 
 export interface LlmConfig {
   baseUrl: string; apiKey: string; model: string; temperature: number; maxTokens?: number; allowSelfSigned: boolean;
+  /** End the request when the gateway sends nothing for this long (waiting for the first token included). Default 180 s. */
+  idleTimeoutMs?: number;
 }
+
+export const DEFAULT_IDLE_TIMEOUT_MS = 180_000;
 export interface TokenUsage { prompt: number; completion: number }
-export interface StreamResult { content: string; toolCalls: ToolCall[]; usage?: TokenUsage }
+export interface StreamResult {
+  content: string; toolCalls: ToolCall[]; usage?: TokenUsage;
+  /** Why the model stopped: "stop", "tool_calls", or "length" when it hit the output-token limit. */
+  finishReason?: string;
+}
 export type LlmFn = (
   cfg: LlmConfig, messages: ChatMessage[], tools: ToolSpec[], onToken: (t: string) => void, signal: AbortSignal,
 ) => Promise<StreamResult>;
@@ -41,7 +49,7 @@ function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen: numbe
 export const stripUiFields = (messages: ChatMessage[]): Omit<ChatMessage, 'display'>[] =>
   messages.map(({ display: _display, ...m }) => m);
 
-const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
+export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
   const url = endpoint(cfg, '/chat/completions');
   const payload: Record<string, unknown> = {
     model: cfg.model, messages: stripUiFields(messages), temperature: cfg.temperature, stream: true,
@@ -52,9 +60,28 @@ const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
   const body = JSON.stringify(payload);
   const lib = url.protocol === 'https:' ? https : http;
 
-  return new Promise<StreamResult>((resolve, reject) => {
-    if (signal.aborted) { reject(new Error('Cancelled')); return; }
+  return new Promise<StreamResult>((outerResolve, outerReject) => {
+    if (signal.aborted) { outerReject(new Error('Cancelled')); return; }
+    // A gateway that stops sending (overloaded GPU, dropped proxy connection) would otherwise leave the session
+    // spinning until the user presses Stop. The timer restarts on every byte received.
+    const idleMs = cfg.idleTimeoutMs && cfg.idleTimeoutMs > 0 ? cfg.idleTimeoutMs : DEFAULT_IDLE_TIMEOUT_MS;
+    let idle: NodeJS.Timeout | undefined;
+    let settled = false;
+    const done = () => { settled = true; clearTimeout(idle); signal.removeEventListener('abort', onAbort); };
+    const resolve = (r: StreamResult) => { if (!settled) { done(); outerResolve(r); } };
+    const reject = (e: Error) => { if (!settled) { done(); outerReject(e); } };
+    const onAbort = () => { req.destroy(); reject(new Error('Cancelled')); };
+    const touch = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        const err = new Error(`LLM stream stalled: the gateway sent nothing for ${Math.round(idleMs / 1000)} s (ETIMEDOUT).`);
+        reject(err);
+        req.destroy(err);
+      }, idleMs);
+    };
     const req = lib.request(requestOptions(cfg, url, 'POST', Buffer.byteLength(body)), (res) => {
+      touch();
+      res.on('data', touch);
       if ((res.statusCode ?? 500) >= 400) {
         let err = '';
         res.on('data', (d) => (err += d));
@@ -63,6 +90,7 @@ const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
       }
       let content = '';
       let usage: TokenUsage | undefined;
+      let finishReason: string | undefined;
       const calls: Record<number, ToolCall> = {};
       let buf = '';
       res.setEncoding('utf8');
@@ -78,6 +106,7 @@ const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
           try {
             const obj = JSON.parse(data);
             if (obj.usage) { usage = { prompt: obj.usage.prompt_tokens ?? 0, completion: obj.usage.completion_tokens ?? 0 }; }
+            if (obj.choices?.[0]?.finish_reason) { finishReason = String(obj.choices[0].finish_reason); }
             const delta = obj.choices?.[0]?.delta;
             if (!delta) { continue; }
             if (delta.content) { content += delta.content; onToken(delta.content); }
@@ -95,12 +124,15 @@ const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
         const toolCalls = Object.keys(calls).map(Number).sort((a, b) => a - b).map((k, n) => {
           const c = calls[k]; if (!c.id) { c.id = `call_${Date.now()}_${n}`; } return c;
         });
-        resolve({ content, toolCalls, ...(usage ? { usage } : {}) });
+        resolve({ content, toolCalls, ...(usage ? { usage } : {}), ...(finishReason ? { finishReason } : {}) });
       });
       res.on('error', reject);
+      // The server closed the connection mid-reply: report it instead of returning a silently truncated answer.
+      res.on('aborted', () => reject(new Error('LLM stream ended early (ECONNRESET).')));
     });
     req.on('error', reject);
-    signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Cancelled')); }, { once: true });
+    signal.addEventListener('abort', onAbort, { once: true });
+    touch();
     req.write(body);
     req.end();
   });

@@ -40,10 +40,10 @@ export function collectFacts(title: string, agents: AgentSnapshot[], root = ''):
         try { args = JSON.parse(tc.function.arguments || '{}'); } catch { continue; }
         const res = results.get(tc.id) ?? '';
         const name = tc.function.name;
-        if ((name === 'write_file' && res.startsWith('Wrote')) || (name === 'edit_file' && res.startsWith('Edited'))) {
+        if ((name === 'write_file' && res.startsWith('Wrote')) || ((name === 'edit_file' || name === 'multi_edit') && res.startsWith('Edited'))) {
           const p = relativizePaths(String(args.path ?? ''), root).replace(/\\/g, '/');
           const f = files.get(p) ?? { path: p, edits: 0, writes: 0 };
-          if (name === 'edit_file') { f.edits++; } else { f.writes++; }
+          if (name !== 'write_file') { f.edits++; } else { f.writes++; }
           files.set(p, f);
         } else if (name === 'run_command' && args.command && !res.startsWith('DENIED')) {
           commands.push({ command: clip(String(args.command), 160), ok: /\[exit 0\]\s*$/.test(res) });

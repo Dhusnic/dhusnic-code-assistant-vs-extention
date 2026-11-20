@@ -2,7 +2,7 @@
     "name": "infraon-code-assistant",
     "displayName": "Infraon Code Assistant",
     "description": "Agentic AI coding assistant powered by the company-hosted LLM",
-    "version": "0.20.1",
+    "version": "0.24.0",
     "publisher": "infraon",
     "engines": {
         "vscode": "^1.90.0"
@@ -96,6 +96,14 @@
             {
                 "command": "infraonAssistant.forgetHostKey",
                 "title": "Infraon Assistant: Forget SSH Host Key"
+            },
+            {
+                "command": "infraonAssistant.setWebApiKey",
+                "title": "Infraon Assistant: Set Web Search API Key or GitHub Token"
+            },
+            {
+                "command": "infraonAssistant.clearWebCache",
+                "title": "Infraon Assistant: Clear Web Cache and Offline Library"
             }
         ],
         "menus": {
@@ -161,8 +169,18 @@
                 },
                 "infraonAssistant.maxIterations": {
                     "type": "number",
-                    "default": 25,
-                    "description": "Max tool-call rounds per request."
+                    "default": 0,
+                    "description": "Max tool-call rounds per request. 0 uses the effort level's value (low 15, medium 50, high 80, max 120)."
+                },
+                "infraonAssistant.maxOutputTokens": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "Max tokens the model may write in one reply. 0 uses the effort level's value (low 4096, medium 8192, high and max 16384). Lower it if the LLM server rejects requests for asking too many tokens."
+                },
+                "infraonAssistant.llmIdleTimeoutSeconds": {
+                    "type": "number",
+                    "default": 180,
+                    "description": "End an LLM request when the gateway sends nothing for this many seconds (including the wait for the first token, which is long for very large prompts). It is retried automatically when nothing was shown yet. 0 uses the default (180)."
                 },
                 "infraonAssistant.autoApprove": {
                     "type": "boolean",
@@ -176,7 +194,7 @@
                 "infraonAssistant.contextWindow": {
                     "type": "number",
                     "default": 262144,
-                    "description": "Context window (tokens) of the model. Used for the usage meter and auto-compaction."
+                    "description": "Context window of the model in tokens. When you do not set it, the extension asks the LLM gateway (vLLM reports max_model_len) and uses that; this value is the fallback when the gateway does not report one. If a request is still rejected as too long, the agent learns the real limit from the error, compacts and retries."
                 },
                 "infraonAssistant.autoCompactThreshold": {
                     "type": "number",
@@ -327,6 +345,179 @@
                     "default": "",
                     "description": "Optional URL of the central policy file. A policy installed on the machine takes priority."
                 },
+                "infraonAssistant.autoVerify": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "After the agent changes files, run the project's checks (typecheck, lint, tests) before it finishes, and send failures back to it to fix (up to 2 times). Commands come from Verify Commands, else a '## Verify' section in INFRAON.md / CLAUDE.md / AGENTS.md, else are detected from package.json, pyproject.toml, go.mod, Cargo.toml, pom.xml or Gradle. Checks follow the session's approval mode."
+                },
+                "infraonAssistant.verifyCommands": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Commands that check this project after code changes, run in order (for example `npm run lint`, `npm test`). Overrides detection. Leave empty to detect them."
+                },
+                "infraonAssistant.web.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Let the agents search the web and read pages, PDFs, documents and images from the internet. Your organization policy can turn this off."
+                },
+                "infraonAssistant.web.approval": {
+                    "type": "string",
+                    "enum": [
+                        "new-domains",
+                        "always",
+                        "never"
+                    ],
+                    "default": "new-domains",
+                    "enumDescriptions": [
+                        "Ask the first time a session contacts a site that is not in Allowed Domains (Auto-execute does not ask).",
+                        "Ask before every page the agent fetches or downloads.",
+                        "Never ask (blocked domains and secrets are still refused)."
+                    ],
+                    "description": "When the agent needs your approval to contact a website. Search and research APIs (arXiv, GitHub, package registries…) never ask."
+                },
+                "infraonAssistant.web.allowedDomains": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "markdownDescription": "Sites fetched without asking. Exact host or `*.example.com`. When not set, a built-in list of documentation, standards and research sites is used (github.com, developer.mozilla.org, docs.python.org, arxiv.org, stackoverflow.com, …)."
+                },
+                "infraonAssistant.web.askDomains": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Sites that always need approval, even in Auto-execute or after an earlier approval."
+                },
+                "infraonAssistant.web.blockedDomains": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Sites that are never contacted."
+                },
+                "infraonAssistant.web.allowPrivateHosts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "markdownDescription": "Intranet hosts the agent may read although they have private IP addresses (internal wiki, docs portal). Everything else on private networks, localhost and cloud metadata addresses is always blocked."
+                },
+                "infraonAssistant.web.blockedQueryPatterns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Regular expressions. A URL or search query that matches one is never sent (internal project code names, customer names). Secrets are always blocked."
+                },
+                "infraonAssistant.web.search.provider": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "searxng",
+                        "brave",
+                        "tavily",
+                        "bing",
+                        "google",
+                        "duckduckgo"
+                    ],
+                    "default": "auto",
+                    "enumDescriptions": [
+                        "The first configured provider (SearXNG URL or an API key), else DuckDuckGo.",
+                        "A self-hosted SearXNG instance (set Search: Searxng Url). Private: queries stay on your network.",
+                        "Brave Search API (key).",
+                        "Tavily, built for AI research (key).",
+                        "Bing Web Search (key).",
+                        "Google Programmable Search (key + Search: Google Cx).",
+                        "DuckDuckGo without a key (best effort; may be rate-limited)."
+                    ],
+                    "markdownDescription": "Web search provider. Set API keys with **Infraon Assistant: Set Web Search API Key or GitHub Token** (they are kept in VS Code's secret storage)."
+                },
+                "infraonAssistant.web.search.searxngUrl": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Base URL of a SearXNG instance, e.g. `https://search.corp.example`. Its JSON format must be enabled (`search.formats: [html, json]`)."
+                },
+                "infraonAssistant.web.search.googleCx": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Google Programmable Search engine id (cx)."
+                },
+                "infraonAssistant.web.researchTools": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Give the agents the R&D research tools: academic papers (Semantic Scholar, arXiv, PubMed, Crossref, OpenAlex), package registries, vulnerability databases (OSV, NVD), GitHub, Hacker News, Stack Overflow, Wikipedia and RFCs."
+                },
+                "infraonAssistant.web.proxy": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Proxy for web access, e.g. `http://proxy.corp:8080` (credentials allowed: `http://user:pass@host:port`). Empty: `HTTPS_PROXY` from the environment, else VS Code's own proxy setting."
+                },
+                "infraonAssistant.web.noProxy": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Hosts reached directly, without the proxy (exact or *.suffix). NO_PROXY from the environment is added."
+                },
+                "infraonAssistant.web.extraCaFile": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to a PEM file with extra CA certificates, for networks that inspect TLS traffic."
+                },
+                "infraonAssistant.web.allowSelfSignedTls": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Accept invalid or self-signed certificates on websites (not recommended; prefer Extra CA File)."
+                },
+                "infraonAssistant.web.cacheTtlMinutes": {
+                    "type": "number",
+                    "default": 15,
+                    "minimum": 0,
+                    "description": "How long a fetched page is reused before it is checked again (pages that did not change are not downloaded again)."
+                },
+                "infraonAssistant.web.cacheMaxMB": {
+                    "type": "number",
+                    "default": 200,
+                    "minimum": 10,
+                    "description": "Disk space for cached pages and snapshots (oldest are removed first)."
+                },
+                "infraonAssistant.web.offline": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Offline mode: nothing is sent to the internet; agents use cached pages and the offline library only."
+                },
+                "infraonAssistant.web.allowDownloads": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Let the agent save files from the web into the workspace (with approval unless edits are automatic). Executables are always refused."
+                },
+                "infraonAssistant.web.maxDownloadMB": {
+                    "type": "number",
+                    "default": 50,
+                    "minimum": 1,
+                    "description": "Largest file the agent may download."
+                },
+                "infraonAssistant.web.searchDailyLimit": {
+                    "type": "number",
+                    "default": 200,
+                    "minimum": 1,
+                    "description": "Web searches per day across all sessions (protects paid search API quotas)."
+                },
+                "infraonAssistant.web.maxRequestsPerSession": {
+                    "type": "number",
+                    "default": 400,
+                    "minimum": 1,
+                    "description": "Web requests one session may make (pages, searches and research API calls)."
+                },
                 "infraonAssistant.confirmDangerousRemoteCommands": {
                     "type": "boolean",
                     "default": true,
@@ -363,8 +554,9 @@
         "compile": "tsc -p .",
         "watch": "tsc -watch -p .",
         "package": "vsce package",
-        "test": "tsc -p . && node --test \"out/test/*.test.js\"",
-        "test:e2e": "tsc -p . && node out/e2e/run.js"
+        "test": "tsc -p . && node --test \"out/test/*.test.js\" && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
+        "test:e2e": "tsc -p . && node out/e2e/run.js",
+        "eval": "tsc -p . && node out/eval/run.js"
     },
     "devDependencies": {
         "@types/node": "^20.0.0",

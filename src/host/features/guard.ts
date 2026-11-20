@@ -12,6 +12,8 @@ import { PermissionRule, evaluatePermission, loadPermissionSettings } from '../.
 import { requiresApproval } from '../../core/policy';
 import { catastrophicReason, isReadOnlyCommand } from '../../core/remoteTools';
 import { SecretVault, redactMessages } from '../../core/redact';
+import { WebPolicy, outboundProblem, siteOf, webDecision } from '../../core/web/policy';
+import { NETWORK_TOOLS, URL_TOOLS, normalizeInputUrl } from '../../core/web/tools';
 
 const TRUST_KEY = 'trustedProjectSettings';
 const RECHECK_MS = 2000;
@@ -40,8 +42,12 @@ export class SafetyCenter {
   private knownSecrets = new Map<string, string>();
   /** Set by the hub: the saved name of a server given by name, IP or user@host. */
   remoteResolve?: (server: unknown) => string | undefined;
+  /** Set by the hub: every workspace folder's path (multi-root workspaces). Unset: only the primary root. */
+  workspaceRoots?: () => string[];
   private auditLog?: AuditLog;
   errors: string[] = [];
+  /** Set by the hub: the effective web policy, and the sites the user approved per session. */
+  web?: { policy(): WebPolicy; approved(sid: string): Set<string> };
 
   constructor(private host: GuardHost) {}
 
@@ -135,6 +141,20 @@ export class SafetyCenter {
     return { blocked: r.blocked, reason: r.reason, context: r.context };
   }
 
+  /**
+   * Rules like edit(src/**) or read(.env) are relative to a workspace folder. A path inside another folder of a
+   * multi-root workspace is checked against that folder, so its rules protect it the same way.
+   */
+  private ruleRoot(req: ToolRequest): string {
+    const raw = req.args && typeof req.args === 'object' ? (req.args.path ?? req.args.local_path) : undefined;
+    const roots = this.workspaceRoots?.() ?? [];
+    if (typeof raw !== 'string' || !path.isAbsolute(raw) || roots.length < 2) { return req.root; }
+    const abs = path.resolve(raw);
+    const within = (r: string) => { const rel = path.relative(path.resolve(r), abs); return !rel.startsWith('..') && !path.isAbsolute(rel); };
+    if (within(req.root)) { return req.root; }
+    return roots.filter(within).sort((a, b) => b.length - a.length)[0] ?? req.root;
+  }
+
   private async decide(req: ToolRequest, sid: string, aid: string): Promise<GuardDecision> {
     await this.ensure();
     // Rules and approvals are keyed by the saved name, so a server given by its IP gets the same treatment.
@@ -142,7 +162,7 @@ export class SafetyCenter {
       const name = this.remoteResolve?.(req.args.server);
       if (name) { req.args.server = name; }
     }
-    const d = evaluatePermission(this.rules, { tool: req.tool, kind: req.kind, args: req.args, root: req.root });
+    const d = evaluatePermission(this.rules, { tool: req.tool, kind: req.kind, args: req.args, root: this.ruleRoot(req) });
     if (d.effect) { this.record({ sessionId: sid, agentId: aid, kind: 'permission', tool: req.tool, detail: describe(req), outcome: d.effect, ruleRaw: d.rule?.raw }); }
     if (d.effect === 'deny') { return { effect: 'deny', reason: d.rule?.raw ?? d.reason }; }
     // Transfers touch local files too: read rules guard what is uploaded, edit rules what is downloaded.
@@ -160,6 +180,8 @@ export class SafetyCenter {
     }
     // Commands that only look at a server are as harmless as reading a file, so "Edit automatically" runs them too.
     if (req.tool === 'remote_exec' && d.effect === undefined && req.mode === 'auto-edit' && isReadOnlyCommand(req.args?.command)) { return { effect: 'allow', reason: 'read-only command' }; }
+    const web = this.webDecide(req, sid, d.effect);
+    if (web) { return web; }
     const target = String(req.args?.path ?? '');
     if ((req.kind === 'edit' && PROTECTED.test(target)) || (req.kind === 'exec' && PROTECTED_IN_COMMAND.test(String(req.args?.command ?? '')))) {
       return { effect: 'ask', reason: 'agent permission settings are protected' };
@@ -169,13 +191,40 @@ export class SafetyCenter {
     return { effect: d.effect, reason: d.rule ? `the permission rule "${d.rule.raw}" (${d.rule.source} settings) says so` : undefined };
   }
 
+  /**
+   * Internet tools: blocked domains and secrets are refused even when a rule allows the tool; a new site asks first
+   * (unless an allow rule, the domain lists or the approval setting say otherwise). undefined: not a web decision.
+   */
+  private webDecide(req: ToolRequest, sid: string, ruleEffect?: 'allow' | 'ask' | 'deny'): GuardDecision | undefined {
+    if (!NETWORK_TOOLS.has(req.tool) || !this.web) { return undefined; }
+    const policy = this.web.policy();
+    if (!URL_TOOLS.has(req.tool)) {
+      if (!policy.enabled) { return { effect: 'deny', reason: 'web access is turned off' }; }
+      const leak = outboundProblem(JSON.stringify(req.args ?? {}), policy);
+      return leak ? { effect: 'deny', reason: leak } : undefined;
+    }
+    let url: string;
+    try { url = normalizeInputUrl(req.args?.url); } catch (e: any) { return { effect: 'deny', reason: e.message }; }
+    const w = webDecision(url, policy, { approved: this.web.approved(sid), mode: req.mode });
+    if (w.effect === 'deny') { return { effect: 'deny', reason: w.reason }; }
+    if (ruleEffect === 'allow') { return undefined; }
+    if (w.effect === 'ask') { return { effect: 'ask', reason: w.reason }; }
+    // A file download still writes into the workspace, so it follows the mode like any edit.
+    return req.tool === 'web_download' ? undefined : { effect: 'allow', reason: w.reason };
+  }
+
   guardFor(sid: string, aid: string, root: string, isSub: boolean): AgentGuard {
     const ids = { session_id: sid, agent_id: aid };
     return {
-      restoreArgs: (args) => {
+      restoreArgs: (args, tool) => {
         const vault = this.vault(sid);
         const restored = vault.restoreValue(args);
         if (vault.hasUnknownPlaceholder(JSON.stringify(restored))) { throw new Error('These arguments contain a masked secret from an earlier VS Code session, so they were not applied. Read the file again and retry.'); }
+        // A masked secret put back into a URL or search query would leave the machine: keep it masked and refuse.
+        if (tool && NETWORK_TOOLS.has(tool) && JSON.stringify(restored) !== JSON.stringify(args)) {
+          throw new Error('Refused: these arguments contain a secret (shown to you as ‹secret:…›). Secrets are never sent to websites or search engines.');
+        }
+        if (tool && NETWORK_TOOLS.has(tool) && vault.hasUnknownPlaceholder(JSON.stringify(args))) { throw new Error('Refused: these arguments contain a masked secret.'); }
         return restored;
       },
       decide: (req) => this.decide(req, sid, aid),
@@ -186,6 +235,9 @@ export class SafetyCenter {
       },
       onApproval: (req, outcome) => {
         this.record({ sessionId: sid, agentId: aid, kind: 'approval', tool: req.tool, detail: describe(req), outcome });
+        if (outcome === 'allowed' && URL_TOOLS.has(req.tool) && this.web) {
+          try { this.web.approved(sid).add(siteOf(new URL(normalizeInputUrl(req.args?.url)).hostname)); } catch { /* invalid URLs were refused already */ }
+        }
         if (outcome === 'asked') { void this.fire('Notification', { ...ids, message: `Approval needed: ${describe(req)}` }, root).catch(() => undefined); }
       },
       onPrompt: (text, signal) => {
@@ -207,5 +259,7 @@ export class SafetyCenter {
 
 function describe(req: ToolRequest): string {
   const where = req.args?.server ? `${req.args.server}: ` : '';
+  if (typeof req.args?.url === 'string') { return `${req.args.url}${req.args.path ? ` → ${req.args.path}` : ''}`; }
+  if (req.tool === 'web_search') { return `search: ${Array.isArray(req.args?.queries) ? req.args.queries.join(' | ') : String(req.args?.query ?? '')}`; }
   return where + String(req.args?.command ?? req.args?.path ?? req.args?.local_path ?? req.args?.pattern ?? JSON.stringify(req.args ?? {}));
 }

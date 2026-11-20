@@ -8,6 +8,7 @@ import { globToRegex } from './glob';
 import { RoutingConfig } from './modelRouting';
 import { renameWithRetry } from './store';
 import { parseTeamSources } from './teamSkills';
+import { PolicyWeb, validatePolicyWeb } from './web/policy';
 
 /**
  * Central settings distribution. The first policy found wins:
@@ -21,6 +22,8 @@ export interface CentralPolicy {
   baseUrl?: string; allowedModels?: string[]; defaultModel?: string; allowSelfSignedTls?: boolean;
   permissions?: PolicyPermissions; disableAutoMode?: boolean; teamSkills?: unknown[]; mcpAllowlist?: string[];
   redactSecrets?: boolean; auditLog?: boolean; routing?: RoutingConfig;
+  /** Internet access: domain lists, approvals, downloads, quotas (see web/policy.ts). */
+  web?: PolicyWeb;
 }
 export type PolicySource = 'env' | 'machine' | 'url' | 'cache' | 'none';
 export interface LoadedPolicy { policy: CentralPolicy; source: PolicySource; errors: string[]; location?: string }
@@ -134,6 +137,7 @@ export function validatePolicy(raw: unknown): { policy: CentralPolicy; errors: s
       policy.routing = routing;
     }
   }
+  if (raw.web !== undefined) { policy.web = validatePolicyWeb(raw.web, errors); }
   return { policy, errors };
 }
 

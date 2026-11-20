@@ -550,15 +550,23 @@ export class SessionManager {
 
   private subResult(rt: AgentRuntime): SpawnResult {
     const where = rt.worktree ? `\n\nThis agent worked on branch ${rt.worktree.branch}. Its changes are not in the main workspace until the user merges them from the Changes panel.` : '';
-    if (rt.outcome === 'completed') { return { ok: true, agentId: rt.id, text: `${rt.result}${where}\n\n(agent id ${rt.id}; use send_message to follow up)` }; }
-    if (rt.outcome === 'cancelled') { return { ok: false, agentId: rt.id, text: `Agent ${rt.id} ("${rt.description}") was stopped by the user before it finished.` }; }
-    return { ok: false, agentId: rt.id, text: `ERROR: agent ${rt.id} ("${rt.description}") failed: ${rt.error ?? 'it finished without a final report (it may have hit its step limit). Try a narrower task.'}` };
+    if (rt.outcome === 'completed') { return { ok: true, agentId: rt.id, text: `${rt.result}${where}\n\n(agent id ${rt.id}; use send_message to follow up)`, ...this.changedBy(rt) }; }
+    if (rt.outcome === 'cancelled') { return { ok: false, agentId: rt.id, text: `Agent ${rt.id} ("${rt.description}") was stopped by the user before it finished.`, ...this.changedBy(rt) }; }
+    return { ok: false, agentId: rt.id, text: `ERROR: agent ${rt.id} ("${rt.description}") failed: ${rt.error ?? 'it finished without a final report (it may have hit its step limit). Try a narrower task.'}`, ...this.changedBy(rt) };
+  }
+
+  /** Files a sub-agent changed in the shared workspace (a worktree agent's changes arrive only when merged). */
+  private changedBy(rt: AgentRuntime): { changed?: string[] } {
+    return !rt.worktree && rt.agent.lastChanged.length ? { changed: [...rt.agent.lastChanged] } : {};
   }
 
   private notifyParent(sub: AgentRuntime): void {
     const s = this.sessions.get(sub.sessionId);
     const parent = sub.parentId ? s?.agents.get(sub.parentId) : undefined;
     if (!parent) { return; }
+    // Even a failed or stopped agent may have changed files: the parent's next turn checks them.
+    const changed = this.changedBy(sub).changed;
+    if (changed) { parent.agent.markExternalChanges(changed); }
     const r = this.subResult(sub);
     parent.inbox.push({
       id: sub.id, description: sub.description ?? sub.name, outcome: sub.outcome,

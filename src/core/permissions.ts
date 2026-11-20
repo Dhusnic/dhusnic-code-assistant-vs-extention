@@ -33,7 +33,7 @@ export interface LoadedPermissions {
   hooks: Partial<Record<RuleSource, unknown>>;
 }
 
-const EDIT_TOOLS = new Set(['write_file', 'edit_file']);
+const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'rename_symbol']);
 const READ_TOOLS = new Set(['read_file', 'grep', 'glob_files', 'list_dir']);
 const SOURCE_RANK: Record<RuleSource, number> = { policy: 0, local: 1, project: 2, user: 3 };
 const MAX_BRACE_EXPANSION = 64;

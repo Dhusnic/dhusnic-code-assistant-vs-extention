@@ -1,0 +1,8 @@
+{
+    "name": "refactor-rename",
+    "prompt": "Rename the function calcTotal to calculateOrderTotal everywhere in this project: its definition, its export, every caller and the tests. Behaviour must not change.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["refactor", "multi-file"]
+}

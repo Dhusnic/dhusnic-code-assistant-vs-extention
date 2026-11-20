@@ -17,7 +17,8 @@ You are a security reviewer. Report findings by severity.
 
 test('builtins mirror Claude Code: general-purpose, explore (read-only), plan (read-only), fork (inherits context)', () => {
   const by = Object.fromEntries(BUILTIN_AGENT_TYPES.map((t) => [t.name, t]));
-  assert.deepEqual(Object.keys(by), ['general-purpose', 'explore', 'plan', 'fork']);
+  assert.deepEqual(Object.keys(by), ['general-purpose', 'explore', 'plan', 'researcher', 'fork']);
+  assert.equal(by.researcher.readOnly, true);
   assert.equal(by.explore.readOnly, true);
   assert.equal(by.plan.readOnly, true);
   assert.equal(by.fork.forkContext, true);

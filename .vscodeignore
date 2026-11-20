@@ -14,3 +14,6 @@ deploy.ps1
 *.vsix
 out/e2e/**
 .e2e/**
+out/eval/**
+eval/**
+eval-results/**

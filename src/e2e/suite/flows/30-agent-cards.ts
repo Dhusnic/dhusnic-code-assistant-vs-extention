@@ -69,7 +69,7 @@ export const flows: Flow[] = [
 
       await t.gw.script(
         callTool('exit_plan_mode', { plan: '## The plan\n\n1. Update the value\n2. Check the result' }),
-        ...(c.applies ? [callTool('edit_file', { path: file, old_string: 'value = 1', new_string: 'value = 2' })] : []),
+        ...(c.applies ? [callTool('read_file', { path: file }), callTool('edit_file', { path: file, old_string: 'value = 1', new_string: 'value = 2' })] : []),
         reply('Plan flow finished.'),
       );
       await s.send('Plan a change');

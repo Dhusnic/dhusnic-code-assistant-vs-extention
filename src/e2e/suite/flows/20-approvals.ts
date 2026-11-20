@@ -6,7 +6,8 @@ import { Flow } from '../types';
 const BEFORE = 'export const value = 1;\n';
 const AFTER = 'export const value = 2;\n';
 const CARD_BUTTONS = '.approve:not(.done) .actions button';
-const edit = (path: string) => callTool('edit_file', { path, old_string: 'value = 1', new_string: 'value = 2' });
+/** The agent must read a file before it may edit it, so a scripted edit is a read followed by the edit. */
+const edit = (path: string) => [callTool('read_file', { path }), callTool('edit_file', { path, old_string: 'value = 1', new_string: 'value = 2' })];
 
 interface EditCase { name: string; button: string; content: string; result: RegExp; toolClass: string; label: string; modeAfter: string }
 
@@ -16,11 +17,11 @@ const EDIT_CASES: EditCase[] = [
   { name: 'approval-allow-all-edits-switches-mode', button: 'Allow all edits', content: AFTER, result: /^Edited /, toolClass: 'ok', label: 'allow all edits', modeAfter: 'Edit automatically' },
 ];
 
-interface RewindCase { name: string; tool: (path: string) => ReturnType<typeof callTool>; existing: boolean }
+interface RewindCase { name: string; tool: (path: string) => Array<ReturnType<typeof callTool>>; existing: boolean }
 
 const REWIND_CASES: RewindCase[] = [
   { name: 'rewind-restores-an-edited-file', tool: edit, existing: true },
-  { name: 'rewind-removes-a-created-file', tool: (path) => callTool('write_file', { path, content: 'brand new\n' }), existing: false },
+  { name: 'rewind-removes-a-created-file', tool: (path) => [callTool('write_file', { path, content: 'brand new\n' })], existing: false },
 ];
 
 export const flows: Flow[] = [
@@ -29,7 +30,7 @@ export const flows: Flow[] = [
     async run(t) {
       const file = t.fixture('target.ts', BEFORE);
       const s = await t.newSession();
-      await t.gw.script(edit(file), reply('Finished with the edit.'));
+      await t.gw.script(...edit(file), reply('Finished with the edit.'));
       await s.send('Change the value');
 
       await s.waitFor('.approve:not(.done) .q', { text: 'Allow file change?' });
@@ -56,7 +57,7 @@ export const flows: Flow[] = [
     async run(t) {
       const file = t.fixture('diffed.ts', BEFORE);
       const s = await t.newSession();
-      await t.gw.script(edit(file), reply('Left it alone.'));
+      await t.gw.script(...edit(file), reply('Left it alone.'));
       await s.send('Propose a change');
       await s.waitFor(CARD_BUTTONS);
 
@@ -99,7 +100,7 @@ export const flows: Flow[] = [
     async run(t) {
       const file = c.existing ? t.fixture('rewound.ts', BEFORE) : `e2e-files/${t.flow.name}/created.ts`;
       const s = await t.newSession();
-      await t.gw.script(c.tool(file), reply('Change made.'));
+      await t.gw.script(...c.tool(file), reply('Change made.'));
       await s.send('Make the change');
       await s.clickText(CARD_BUTTONS, 'Allow');
       await s.waitFor('.msg.assistant .md', { text: 'Change made.' });
@@ -124,7 +125,7 @@ export const flows: Flow[] = [
     async run(t) {
       const file = t.fixture('stopped.ts', BEFORE);
       const s = await t.newSession();
-      await t.gw.script(edit(file));
+      await t.gw.script(...edit(file));
       await s.send('Change it, then I will stop you');
       await s.waitFor(CARD_BUTTONS);
       await s.click('#stop');

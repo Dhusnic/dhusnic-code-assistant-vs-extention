@@ -1,0 +1,8 @@
+{
+    "name": "bug-no-test",
+    "prompt": "Bug report from a user: \"Dates in the export look wrong: March 5th, 2024 shows up as 2024-2-5.\" formatDate in src/format.js must return YYYY-MM-DD, zero-padded, in local time. Fix it, and add a test that would have caught it.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "no-test"]
+}

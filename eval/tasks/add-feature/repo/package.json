@@ -1,0 +1,9 @@
+{
+    "name": "inventory-cli",
+    "version": "1.0.0",
+    "private": true,
+    "bin": { "inventory": "src/cli.js" },
+    "scripts": {
+        "test": "node --test"
+    }
+}

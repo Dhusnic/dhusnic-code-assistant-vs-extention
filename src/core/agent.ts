@@ -1,4 +1,6 @@
-import { ChatMessage, LlmConfig, LlmFn, ToolCall, ToolSpec } from './llm';
+import { ChatMessage, LlmConfig, LlmFn, StreamResult, ToolCall, ToolSpec } from './llm';
+import { contextLimitFromError, isContextLengthError } from './modelInfo';
+import { parseTextToolCalls } from './textToolCalls';
 import { ApprovalPreview, Tool, ToolKind, fnSpec } from './tool';
 import { AgentType, BUILTIN_AGENT_TYPES, DEFAULT_AGENT_TYPE } from './agentTypes';
 import { Answers, MAX_OPTIONS, MAX_QUESTIONS, UserQuestion, formatAnswers, validateQuestions } from './questions';
@@ -8,6 +10,10 @@ import { Effort, Mode, effortParams, isAllowed, requiresApproval } from './polic
 import { BASE_PROMPT, environmentSection } from './prompts';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
 import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact } from './compaction';
+import * as path from 'path';
+import { FileReadTracker, clipOutput, resolveIn } from './fstools';
+import { FileChangeFeed } from './changeJournal';
+import { WorkspaceRoot } from './tool';
 
 export interface ApprovalRequest {
   id: string;
@@ -37,6 +43,8 @@ export interface AgentUi {
   userInjected?(items: QueuedInput[]): void;
   /** Live progress lines from a running sub-agent, shown inside its task card. */
   subProgress?(parentId: string, text: string): void;
+  /** End of a turn that changed files: which files, and which checks ran after the last change. */
+  verification?(v: { changed: string[]; checks: Array<{ label: string; ok: boolean }> }): void;
 }
 
 export interface RunOptions { mode: Mode; effort: Effort; model: string }
@@ -56,7 +64,7 @@ export interface HookOutcome { blocked: boolean; reason?: string; context?: stri
 /** Optional safety layer around the agent loop: permission rules, hooks, secret masking and auditing. */
 export interface AgentGuard {
   /** Turns masked secrets in tool arguments back into real values; throws if the arguments cannot be restored safely. */
-  restoreArgs?(args: any): any;
+  restoreArgs?(args: any, tool?: string): any;
   decide?(req: ToolRequest): Promise<GuardDecision> | GuardDecision;
   beforeTool?(req: ToolRequest, signal: AbortSignal): Promise<HookOutcome>;
   afterTool?(req: ToolRequest, ok: boolean, result: string, ms: number, signal: AbortSignal): Promise<HookOutcome | void>;
@@ -93,7 +101,75 @@ export interface AgentDeps {
   extraSystem?: string;
   /** Skills (SKILL.md) the agent may load with the skill tool. */
   skills?: () => Skill[];
+  /**
+   * The project's own checks (typecheck, lint, tests). When the agent changed files and is about to finish, these run
+   * through run_command (same approvals and rules); failures go back to the model to fix before it may finish.
+   */
+  checks?: () => Promise<CheckCommand[]> | CheckCommand[];
+  /** User overrides of the effort level's limits (0 or missing = use the effort level's value). */
+  limits?: () => { maxIterations?: number; maxTokens?: number };
+  /** Every file change in the workspace, so changes made by shell commands and sub-agents count as changes too. */
+  fileChanges?: FileChangeFeed;
+  /** All workspace folders (multi-root); the first that equals root is the primary one. */
+  roots?: () => WorkspaceRoot[];
 }
+
+/** How many times one turn may recover from a reply cut off at the output-token limit. */
+export const MAX_CUT_OFF_RECOVERIES = 3;
+/** How many times one turn may compact and retry after the model said the request was too long. */
+export const MAX_OVERFLOW_RETRIES = 2;
+const isJson = (s: string): boolean => { try { JSON.parse(s || '{}'); return true; } catch { return false; } };
+
+/** One project check: a shell command run in the workspace root. */
+export interface CheckCommand {
+  name: string; command: string; timeoutSeconds: number;
+  /** Faster form limited to the changed files: {files} = quoted changed paths, {dirs} = their folders as ./dir. */
+  related?: string;
+}
+
+/** Documentation, images and similar: changing only these needs no build or test run. */
+export const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc|png|jpe?g|gif|svg|ico|webp|pdf)$|(^|\/)(LICENSE|CHANGELOG|AUTHORS|CODEOWNERS|NOTICE)(\.[a-z]+)?$/i;
+/** Above this many changed files the related form is no faster than the full run. */
+const MAX_RELATED_FILES = 20;
+
+/**
+ * The checks to run for these changed files (workspace-relative, forward slashes): none when only documentation
+ * changed; the related (faster) form of a check when it has one and few files changed; the full command otherwise.
+ */
+export function scopeChecks(checks: CheckCommand[], changed: string[]): CheckCommand[] {
+  const code = changed.filter((f) => !DOC_FILE.test(f));
+  if (changed.length && !code.length) { return []; }
+  const local = code.filter((f) => !/^([a-z]:)?\//i.test(f));
+  return checks.map((c) => {
+    if (!c.related || !local.length || local.length > MAX_RELATED_FILES || local.length !== code.length) { return c; }
+    const files = local.map((f) => `"${f}"`).join(' ');
+    const goDirs = [...new Set(local.filter((f) => f.endsWith('.go')).map((f) => { const d = path.posix.dirname(f); return d === '.' ? '.' : `./${d}`; }))];
+    if (c.related.includes('{dirs}') && !goDirs.length) { return c; }
+    return { ...c, command: c.related.replace('{files}', files).replace('{dirs}', goDirs.join(' ')) };
+  });
+}
+
+/** How many times failing checks may send the agent back to fix them in one turn. */
+export const MAX_CHECK_ROUNDS = 2;
+const CHECK_OUTPUT_CHARS = 8000;
+
+export function checksPromptSection(checks: CheckCommand[]): string {
+  if (!checks.length) { return ''; }
+  return `# Project checks
+These commands check this project. Run the relevant ones with run_command (pass timeout_seconds) after changing code. They also run automatically when you finish a turn in which you changed files; if one fails you will get its output and must fix the cause.
+${checks.map((c) => `- ${c.name}: \`${c.command}\``).join('\n')}`;
+}
+
+/** Exit code from run_command output ("[exit 0]" on the last line), or undefined when it did not finish normally. */
+export function exitCodeOf(result: string): number | undefined {
+  const m = /\[exit (-?\d+)\]\s*$/.exec(result);
+  return m ? Number(m[1]) : undefined;
+}
+
+const NOT_RUN = /^(DENIED|BLOCKED)/;
+
+/** How a command appears in the verification summary. */
+const checkLabel = (command: string): string => (command.length > 60 ? `${command.slice(0, 57)}...` : command);
 
 export interface SpawnRequest {
   parentToolId: string; description: string; prompt: string; type: string; background: boolean;
@@ -101,7 +177,11 @@ export interface SpawnRequest {
   /** The parent's conversation so far (used by the "fork" type). */
   history: ChatMessage[];
 }
-export interface SpawnResult { ok: boolean; text: string; agentId?: string }
+export interface SpawnResult {
+  ok: boolean; text: string; agentId?: string;
+  /** Absolute paths the sub-agent changed in the parent's workspace (not in a worktree of its own). */
+  changed?: string[];
+}
 
 export { BASE_PROMPT } from './prompts';
 
@@ -194,7 +274,7 @@ export const PLAN_SPEC: ToolSpec = fnSpec(PLAN_TOOL,
 const PLAN_PROMPT = `\n\nYou are in PLAN MODE. You may only read and search; you cannot edit files or run commands.
 Research the task thoroughly, then call the exit_plan_mode tool with a concrete plan for the user to approve: numbered steps, the files you will change, risks, and how you will verify the result. Do not write the plan only as chat text and do not start implementing until the plan is approved.`;
 
-export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memory: string, activeFile?: string, subagent = false, extra = ''): string {
+export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memory: string, activeFile?: string, subagent = false, extra = '', checks = '', roots?: WorkspaceRoot[]): string {
   const hint = effortParams(effort).hint;
   return [
     BASE_PROMPT,
@@ -202,7 +282,8 @@ export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memo
     subagent ? SUBAGENT_PROMPT : '',
     extra ? `\n\n${extra}` : '',
     hint ? `\n\nEffort guidance: ${hint}` : '',
-    `\n\n${environmentSection(root, { platform: process.platform })}`,
+    `\n\n${environmentSection(root, { platform: process.platform, ...(roots && roots.length > 1 ? { roots } : {}) })}`,
+    checks ? `\n\n${checks}` : '',
     activeFile ? `\nActive file: ${activeFile}` : '',
     memory ? `\n\n# Project instructions\n${memory}` : '',
   ].join('');
@@ -219,15 +300,31 @@ export class Agent {
   private approvals = new Serializer();
   /** Supplies (and removes) messages the user queued while this agent was busy. */
   pendingInput?: () => QueuedInput[];
+  /** Which files this agent has read, so edits are based on their current contents. */
+  readonly reads = new FileReadTracker();
+  /** Absolute paths changed in this agent's last turn (by any of its tools, commands or sub-agents). */
+  lastChanged: string[] = [];
+  /** Changes made for this agent outside its own tool calls (a background sub-agent), counted in its next turn. */
+  private pendingExternal = new Set<string>();
+
+  /** A background sub-agent changed these files: the next turn's checks and summary must include them. */
+  markExternalChanges(paths: string[]): void { for (const p of paths) { this.pendingExternal.add(p); } }
+  private takePending(): string[] { const out = [...this.pendingExternal]; this.pendingExternal.clear(); return out; }
 
   constructor(protected deps: AgentDeps) {}
 
-  reset(): void { this.cancel(); this.history = []; this.turnStarts = []; }
+  reset(): void { this.cancel(); this.history = []; this.turnStarts = []; this.reads.clear(); }
   cancel(): void { this.abort?.abort(); }
   get turnCount(): number { return this.turnStarts.length; }
 
+  private warnedTextCalls = false;
+
+  /** The model's real context limit, learned from a "too long" error (smaller than the configured one). */
+  private learnedLimit?: number;
+
   contextUsage(): { used: number; limit: number } {
-    return { used: estimateTokens(this.history), limit: this.deps.contextLimit?.() ?? DEFAULT_CONTEXT };
+    const configured = this.deps.contextLimit?.() ?? DEFAULT_CONTEXT;
+    return { used: estimateTokens(this.history), limit: this.learnedLimit ? Math.min(configured, this.learnedLimit) : configured };
   }
 
   /**
@@ -304,6 +401,8 @@ export class Agent {
     this.cancel();
     this.history = [...state.history];
     this.turnStarts = [...state.turnStarts];
+    // Files may have changed while the session was closed: everything must be read again before it is edited.
+    this.reads.clear();
     this.closeDanglingToolCalls();
   }
 
@@ -334,14 +433,35 @@ export class Agent {
   async send(userText: string, opts: RunOptions, ui: AgentUi, display?: string): Promise<void> {
     this.turnStarts.push(this.history.length);
     const turn = this.turnStarts.length - 1;
-    this.history.push({ role: 'user', content: userText, ...(display && display !== userText ? { display } : {}) });
+    // The active file goes with the message, not into the system prompt: a system prompt that changes whenever the
+    // user switches tabs defeats the server's prefix cache, so every request would re-process the whole conversation.
+    const active = this.deps.activeFile?.();
+    const content = active ? `${userText}\n\n(Active editor file: ${active})` : userText;
+    const shown = display ?? (content !== userText ? userText : undefined);
+    this.history.push({ role: 'user', content, ...(shown && shown !== content ? { display: shown } : {}) });
     this.abort = new AbortController();
     const { signal } = this.abort;
     const run: RunOptions = { ...opts };
-    const ep = effortParams(run.effort);
+    const ep = { ...effortParams(run.effort) };
+    const limits = this.deps.limits?.() ?? {};
+    if (limits.maxIterations && limits.maxIterations > 0) { ep.maxIterations = Math.floor(limits.maxIterations); }
+    if (limits.maxTokens && limits.maxTokens > 0) { ep.maxTokens = Math.floor(limits.maxTokens); }
 
     let stopContinues = 0;
+    let checkRounds = 0;
+    let cutOffs = 0;
+    let overflows = 0;
+    /** Files changed since the checks last ran. */
+    let dirty = false;
+    this.track = { changed: new Set(), abs: new Set(), verified: [] };
+    const feed = this.deps.fileChanges;
+    let cursor = feed?.cursor() ?? 0;
+    const roots = this.deps.roots?.();
+    const early = this.takePending();
+    if (early.length) { dirty = true; this.noteChanged(early); }
     try {
+      const checks = await this.loadChecks();
+      const checksSection = checksPromptSection(checks);
       const submitted = await this.deps.guard?.onPrompt?.(userText, signal);
       if (submitted?.blocked) {
         const text = `Blocked by a hook: ${submitted.reason ?? 'no reason given'}`;
@@ -360,33 +480,101 @@ export class Agent {
         const memory = (await this.deps.memory?.()) ?? '';
         const system: ChatMessage = {
           role: 'system',
-          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, this.deps.activeFile?.(), !!this.deps.subagent, this.deps.extraSystem ?? ''),
+          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots),
         };
         const specs = this.specsFor(run.mode);
         this.lastContext = measureContext(system.content ?? '', memory, specs);
-        const res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal);
+        let res: StreamResult;
+        try {
+          res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal);
+        } catch (e) {
+          // Too long for the model: learn its real limit from the error, shorten the conversation and try again.
+          if (!isContextLengthError(e) || overflows >= MAX_OVERFLOW_RETRIES) { throw e; }
+          overflows++;
+          const limit = contextLimitFromError(e);
+          if (limit) { this.learnedLimit = limit; ep.maxTokens = Math.min(ep.maxTokens, Math.max(1024, Math.floor(limit / 4))); }
+          ui.info(`The conversation is too long for the model${limit ? ` (its limit is ${limit} tokens)` : ''}; compacting it and retrying.`);
+          await this.compact(opts, ui, true);
+          continue;
+        }
+        // A gateway without a tool-call parser returns the calls as text (<tool_call>…): recognize and run them anyway.
+        if (!res.toolCalls.length && res.content) {
+          const parsed = parseTextToolCalls(res.content, specs.map((sp) => sp.function.name));
+          if (parsed) {
+            res = { ...res, content: parsed.rest, toolCalls: parsed.calls };
+            if (!this.warnedTextCalls) {
+              this.warnedTextCalls = true;
+              ui.info('The model wrote its tool calls as text; they were recognized and run. For best results, enable tool-call parsing on the LLM gateway (vLLM: --enable-auto-tool-choice --tool-call-parser <name>).');
+            }
+          }
+        }
+        // The reply hit the output-token limit: a cut-off tool call has broken arguments, and cut-off text is unfinished.
+        if (res.finishReason === 'length' && cutOffs < MAX_CUT_OFF_RECOVERIES) {
+          const broken = res.toolCalls.some((tc) => !isJson(tc.function.arguments));
+          if (broken || !res.toolCalls.length) {
+            cutOffs++;
+            this.history.push({ role: 'assistant', content: res.content || (broken ? '(reply cut off while writing a tool call)' : null) });
+            this.history.push(broken
+              ? { role: 'user', content: `Your last reply was cut off at the output limit (${ep.maxTokens} tokens) while you were writing a tool call, so it was NOT run. Send it again in smaller pieces: for a large file, write_file a first part, then add the rest with edit_file or multi_edit; for many changes, use several smaller calls.`, display: 'Reply cut off: asked to split it up' }
+              : { role: 'user', content: 'Your last reply was cut off at the output limit. Continue exactly where you stopped, without repeating what you already wrote.', display: 'Reply cut off: continuing' });
+            ui.info(broken ? 'The reply was cut off at the output limit while writing a tool call; asking the model to split it up.' : 'The reply was cut off at the output limit; asking the model to continue.');
+            continue;
+          }
+        }
         this.history.push({ role: 'assistant', content: res.content || null, tool_calls: res.toolCalls.length ? res.toolCalls : undefined });
         if (!res.toolCalls.length) {
           // A message queued during this reply is answered right away, in the same turn.
           if (this.hasQueued()) { continue; }
+          const scoped = dirty ? scopeChecks(checks, [...this.track.changed]) : [];
+          if (dirty && checks.length && !scoped.length) { dirty = false; ui.info('Only documentation changed: project checks skipped.'); }
+          // The model already ran every check after its last change and they passed: no need to run them again.
+          if (dirty && this.alreadyVerified(checks, scoped)) { dirty = false; }
+          if (dirty && scoped.length && run.mode !== 'plan' && this.toolFor('run_command')) {
+            dirty = false;
+            const failed = await this.runChecks(scoped, run, ui, signal, turn);
+            if (failed) {
+              if (checkRounds < MAX_CHECK_ROUNDS) {
+                checkRounds++;
+                this.history.push({
+                  role: 'user',
+                  content: `The project checks failed after your changes (automatic check ${checkRounds} of ${MAX_CHECK_ROUNDS}). Read the output, fix the root cause, and do not finish until the checks pass. If the failure is unrelated to your change (it was already failing before), say so instead of changing unrelated code.\n\n### ${failed.name}: \`${failed.command}\`\n${clipOutput(failed.output, CHECK_OUTPUT_CHARS)}`,
+                  display: `Checks failed: ${failed.name}`,
+                });
+                continue;
+              }
+              ui.info(`Project checks are still failing (${failed.name}: ${failed.command}) after ${MAX_CHECK_ROUNDS} fix attempts. Review the output above.`);
+            }
+          }
           const stop = await this.deps.guard?.onStop?.(signal);
-          if (!stop?.blocked || stopContinues >= MAX_STOP_CONTINUES) { return; }
+          if (!stop?.blocked || stopContinues >= MAX_STOP_CONTINUES) { this.reportVerification(ui); return; }
           stopContinues++;
           this.history.push({ role: 'user', content: `A Stop hook asked you to continue: ${stop.reason ?? 'the task is not finished'}`, display: 'Stop hook: continue' });
           continue;
         }
         const exec = (tc: ToolCall) => this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn);
         for (const batch of planBatches(res.toolCalls, (tc) => this.parallelSafe(tc, run.mode), MAX_PARALLEL_TOOLS)) {
+          // Changes from before this batch (the user typing, a background agent) are not this batch's doing.
+          if (feed) { cursor = feed.cursor(); }
           const results = batch.length === 1 ? [await exec(batch[0])] : await Promise.all(batch.map(exec));
-          batch.forEach((tc, j) => this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] }));
+          const seen = feed ? await feed.changedSince(cursor, batch.some((tc) => this.mayChangeFiles(tc, run.mode))) : undefined;
+          if (seen) { cursor = seen.cursor; }
+          const external = [...(seen?.paths ?? []), ...this.takePending()];
+          if (external.length) { dirty = true; this.noteChanged(external); }
+          batch.forEach((tc, j) => {
+            this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] });
+            // A command that changed files (a formatter, a code generator) is a change, not a check.
+            if (this.noteResult(tc.function.name, tc.function.arguments, results[j], external.length > 0)) { dirty = true; }
+          });
         }
       }
-      ui.info(`Stopped after ${ep.maxIterations} tool rounds.`);
+      ui.info(`Stopped after ${ep.maxIterations} tool rounds. Send "continue" to let the agent carry on (or raise Max Iterations in settings).`);
+      this.reportVerification(ui);
     } catch (e: any) {
       if (e.message !== 'Cancelled') { throw e; }
       this.closeDanglingToolCalls();
       ui.info('Cancelled.');
     } finally {
+      this.lastChanged = [...this.track.abs];
       const u = this.contextUsage();
       ui.usage?.(u.used, u.limit);
     }
@@ -405,6 +593,109 @@ export class Agent {
     if (tool.kind === 'read') { return true; }
     if (name !== 'run_command') { return false; }
     try { return isReadOnlyCommand(String(JSON.parse(tc.function.arguments || '{}').command ?? '')); } catch { return false; }
+  }
+
+  /** What this turn changed, and what was checked after the latest change. */
+  private track: { changed: Set<string>; abs: Set<string>; verified: Array<{ label: string; ok: boolean }> } = { changed: new Set(), abs: new Set(), verified: [] };
+
+  /** Files changed by something other than an edit tool (a command, a sub-agent): they count, and reset the evidence. */
+  private noteChanged(absPaths: string[]): void {
+    for (const abs of absPaths) {
+      this.track.abs.add(path.resolve(abs));
+      this.track.changed.add(this.displayPath(abs));
+    }
+    this.track.verified = [];
+  }
+
+  /** A path for the summary: relative to the workspace root when inside it, with forward slashes. */
+  private displayPath(abs: string): string {
+    const rel = path.relative(path.resolve(this.deps.root), path.resolve(abs));
+    return (rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : abs).replace(/\\/g, '/');
+  }
+
+  /** Whether running this call can change files in ways the agent does not see directly (commands, sub-agents). */
+  private mayChangeFiles(tc: ToolCall, mode: Mode): boolean {
+    const name = tc.function.name;
+    if (name === AGENT_TOOL) { return true; }
+    const tool = this.toolFor(name);
+    if (!tool || tool.kind === 'read' || tool.kind === 'meta' || tool.kind === 'edit') { return false; }
+    if (name === 'run_command') {
+      try { return !isReadOnlyCommand(String(JSON.parse(tc.function.arguments || '{}').command ?? '')); } catch { return true; }
+    }
+    return isAllowed(mode, tool.kind);
+  }
+
+  /** Every project check already ran, and passed, after the last change. */
+  private alreadyVerified(checks: CheckCommand[], scoped: CheckCommand[]): boolean {
+    const passed = (cmd: string) => this.track.verified.some((v) => v.ok && v.label === checkLabel(cmd));
+    // The full command, or its related form for these files, counts.
+    return checks.length > 0 && checks.every((c, i) => passed(c.command) || (scoped[i] !== undefined && passed(scoped[i].command)));
+  }
+
+  /**
+   * Records a tool result for the turn's verification summary. Returns true when it changed a file.
+   * A change resets the evidence: only checks that ran after the latest change count.
+   */
+  private noteResult(name: string, rawArgs: string, result: string, changedFiles = false): boolean {
+    if (/^(ERROR|DENIED|BLOCKED)/.test(result)) { return false; }
+    let args: any = {};
+    try { args = JSON.parse(rawArgs || '{}'); } catch { /* ignore */ }
+    if (this.toolFor(name)?.kind === 'edit') {
+      if (typeof args.path === 'string' && args.path) {
+        const abs = path.resolve(this.deps.root, args.path);
+        this.track.abs.add(abs);
+        this.track.changed.add(this.displayPath(abs));
+      } else { this.track.changed.add(name); }
+      this.track.verified = [];
+      return true;
+    }
+    if (name === 'run_command' && typeof args.command === 'string' && !changedFiles) {
+      const label = checkLabel(args.command);
+      this.track.verified = this.track.verified.filter((v) => v.label !== label);
+      this.track.verified.push({ label, ok: exitCodeOf(result) === 0 });
+    } else if (name === 'get_diagnostics') {
+      this.track.verified = this.track.verified.filter((v) => v.label !== 'diagnostics');
+      this.track.verified.push({ label: 'diagnostics', ok: !/\[Error\]/.test(result) });
+    }
+    return false;
+  }
+
+  /** Tells the user, after a turn that changed files, what was checked after the last change, or that nothing was. */
+  private reportVerification(ui: AgentUi): void {
+    const { changed, verified } = this.track;
+    if (!changed.size || this.deps.subagent) { return; }
+    const files = `Changed ${changed.size} file${changed.size === 1 ? '' : 's'}`;
+    const docsOnly = [...changed].every((f) => DOC_FILE.test(f));
+    const summary = verified.length
+      ? `${files}. Checked after the last change: ${verified.map((v) => `${v.ok ? '✓' : '✗'} ${v.label}`).join(' · ')}`
+      : docsOnly ? `${files} (documentation only; no checks needed).`
+        : `${files}. Not verified: no build, test, lint or diagnostics check ran after the last change.`;
+    ui.verification?.({ changed: [...changed], checks: verified.map((v) => ({ ...v })) });
+    ui.info(summary);
+  }
+
+  /** The project's checks; sub-agents skip them (the parent checks the combined result). */
+  private async loadChecks(): Promise<CheckCommand[]> {
+    if (this.deps.subagent || !this.deps.checks) { return []; }
+    try { return (await this.deps.checks()).filter((c) => c && typeof c.command === 'string' && c.command.trim()); } catch { return []; }
+  }
+
+  /**
+   * Runs the checks in order through run_command, so permission rules, approvals, hooks and the audit log apply.
+   * Stops at the first failure and returns it; returns undefined when all pass or the user declined to run them.
+   */
+  private async runChecks(checks: CheckCommand[], run: RunOptions, ui: AgentUi, signal: AbortSignal, turn: number): Promise<{ name: string; command: string; output: string } | undefined> {
+    const passed: string[] = [];
+    for (let i = 0; i < checks.length; i++) {
+      const c = checks[i];
+      const out = await this.execTool(`check_${turn}_${i}_${Date.now().toString(36)}`, 'run_command', JSON.stringify({ command: c.command, timeout_seconds: c.timeoutSeconds }), run, ui, signal, turn);
+      this.noteResult('run_command', JSON.stringify({ command: c.command }), out);
+      if (NOT_RUN.test(out)) { ui.info(`Project checks skipped (${c.name} was not run).`); return undefined; }
+      if (exitCodeOf(out) !== 0) { return { name: c.name, command: c.command, output: out }; }
+      passed.push(c.name);
+    }
+    ui.info(`Project checks passed: ${passed.join(', ')}.`);
+    return undefined;
   }
 
   private hasQueued(): boolean {
@@ -452,6 +743,8 @@ export class Agent {
     if (this.deps.spawn) {
       try {
         const r = await this.deps.spawn({ parentToolId: id, description: title, prompt, type, background, settings: { ...run }, signal, history: this.history });
+        // A foreground sub-agent's changes are this turn's changes: they must be checked before the turn ends.
+        if (r.changed?.length) { this.markExternalChanges(r.changed); }
         return finish(r.ok, r.text);
       } catch (e: any) {
         if (e.message === 'Cancelled') { ui.toolEnd(id, false, 'Cancelled'); throw e; }
@@ -586,9 +879,17 @@ export class Agent {
     }
     const guard = this.deps.guard;
     let restoreError: string | undefined;
-    try { if (guard?.restoreArgs) { args = guard.restoreArgs(args); } } catch (e: any) { restoreError = e.message ?? String(e); }
+    try { if (guard?.restoreArgs) { args = guard.restoreArgs(args, name); } } catch (e: any) { restoreError = e.message ?? String(e); }
+    // Multi-root: "<folder name>/path" becomes an absolute path first, so permission rules see the real file.
+    const roots = this.deps.roots?.();
+    if (roots && roots.length > 1 && args && typeof args === 'object' && typeof args.path === 'string' && args.path && !path.isAbsolute(args.path)) {
+      try {
+        const abs = resolveIn({ root: this.deps.root, roots }, args.path);
+        if (path.relative(this.deps.root, abs).startsWith('..')) { args = { ...args, path: abs }; }
+      } catch { /* the tool reports the bad path */ }
+    }
     const ctx = {
-      root: this.deps.root, signal,
+      root: this.deps.root, roots, signal, reads: this.reads,
       snapshot: (abs: string) => this.deps.snapshot?.(turn, abs) ?? Promise.resolve(),
     };
     const allowed = isAllowed(opts.mode, tool.kind);

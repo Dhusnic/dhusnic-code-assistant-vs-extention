@@ -218,5 +218,22 @@ export async function runFeature(hub: Hub, panel: FeaturePanel, name: string, ar
       break;
     }
     case 'schedule': await (await hub.getScheduler()).manage(); break;
+    case 'sources': {
+      if (args.trim() === 'save') {
+        const file = await hub.web.saveSources(panel.sid, hub.root);
+        await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+        panel.info(`Sources saved to ${path.relative(hub.root, file)}.`);
+        break;
+      }
+      panel.info(`${hub.web.sources(panel.sid).toMarkdown()}\n\nUse /sources save to write them to a Markdown file.`);
+      break;
+    }
+    case 'web': {
+      const a = args.trim().toLowerCase();
+      if (a === 'key' || a === 'keys') { await hub.web.setKey(); break; }
+      if (a === 'clear-cache' || a === 'clear') { panel.info(await hub.web.clearCache()); break; }
+      panel.info(await hub.web.status(panel.sid));
+      break;
+    }
   }
 }

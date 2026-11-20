@@ -97,7 +97,7 @@ export class SessionPanel {
       sessionId: this.sid, agentId: this.focused, mainId: this.mainId, viewingSub: rt.role === 'sub',
       focusedAgent: { name: rt.name, type: rt.type, description: rt.description, status: rt.status, outcome: rt.outcome },
       agentTypes: this.hub.agentTypes.map((t) => ({ name: t.name, description: t.description, readOnly: !!t.readOnly, source: t.source })),
-      contextLimit: this.hub.cfg.get<number>('contextWindow', 262144), e2e: this.hub.e2e,
+      contextLimit: this.hub.contextWindow(), e2e: this.hub.e2e,
     };
   }
 
@@ -275,7 +275,7 @@ Look at the code first if that helps make the steps concrete. If anything import
 
   private contextDetails() {
     const rt = this.mgr.agent(this.sid, this.focused);
-    const limit = this.hub.cfg.get<number>('contextWindow', 131072);
+    const limit = this.hub.contextWindow();
     const ratio = this.hub.cfg.get<number>('autoCompactThreshold', 0.75);
     const b = rt.agent.contextBreakdown(limit, ratio);
     return {
@@ -377,6 +377,11 @@ Look at the code first if that helps make the steps concrete. If anything import
     if (!text.trim() && !imgs.ok.length) { return; }
     const exp = await expandMentions(text, this.hub.root);
     if (exp.missing.length) { this.info(`Could not attach: ${exp.missing.join(', ')}`); }
+    // The agent sees attached files in full, so it may edit them without reading them again first.
+    try {
+      const target = this.mgr.agent(this.sid, this.focused).agent;
+      for (const abs of exp.read) { await target.reads.markRead(abs); }
+    } catch { /* no such agent any more: it will simply read the files itself */ }
     let prompt = exp.text;
     if (imgs.ok.length) {
       this.info(`Reading text from ${imgs.ok.length} screenshot${imgs.ok.length > 1 ? 's' : ''} (local OCR)…`);

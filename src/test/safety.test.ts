@@ -611,37 +611,7 @@ test('redactMessages: multi-line secrets in arguments stay valid JSON and round 
   assert.ok(!broken[0].tool_calls![0].function.arguments.includes(fake.github), 'unparsable arguments are masked as text');
 });
 
-test('redact: 2MB inputs finish in under 500ms, including adversarial shapes', () => {
-  const size = 2 * 1024 * 1024;
-  const fill = (s: string) => s.repeat(Math.ceil(size / s.length)).slice(0, size);
-  const shapes: Record<string, string> = {
-    prose: fill('The quick brown fox jumps over the lazy dog. const value = compute(42);\n'),
-    letters: fill('a'),
-    keys: fill('password='),
-    keysSpaced: fill('password = a '),
-    quotes: fill('token="'),
-    pemOpen: fill('-----BEGIN PRIVATE KEY-----\n'),
-    jwtDash: fill('eyJ-'),
-    jwtDots: fill('eyJabcdefghij.'),
-    urls: fill('a://b:c'),
-    urlAt: fill('x://a:b@'),
-    conn: fill('pwd=a;'),
-    bearer: fill('Bearer '),
-    auth: fill('Authorization: '),
-    dashes: fill('xoxb-'),
-    placeholders: fill('‹secret:generic:1›'),
-  };
-  for (const [name, text] of Object.entries(shapes)) {
-    // Best of three: the bound is about the algorithm, not about other processes on a busy machine.
-    let ms = Infinity;
-    for (let i = 0; i < 3 && ms >= 500; i++) {
-      const t0 = performance.now();
-      new SecretVault().redact(text);
-      ms = Math.min(ms, performance.now() - t0);
-    }
-    assert.ok(ms < 500, `${name} took ${ms.toFixed(0)}ms`);
-  }
-});
+// The 2MB redact timing test lives in test/slow/perf.test.ts: it runs on its own so a busy suite cannot starve it.
 
 // ---------------------------------------------------------------- audit
 

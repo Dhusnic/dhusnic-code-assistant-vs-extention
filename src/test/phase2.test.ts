@@ -111,7 +111,7 @@ test('agent: rewind restores files and truncates the conversation', async () => 
   const root = await tmpDir(); const store = new CheckpointStore(path.join(await tmpDir(), 'cp'));
   await fs.writeFile(path.join(root, 'a.txt'), 'start');
   const llm = fakeLlm([
-    call('write_file', { path: 'a.txt', content: 'turn0' }, 'x1'), text('t0 done'),
+    call('read_file', { path: 'a.txt' }, 'r1'), call('write_file', { path: 'a.txt', content: 'turn0' }, 'x1'), text('t0 done'),
     call('write_file', { path: 'b.txt', content: 'turn1' }, 'x2'), text('t1 done'),
   ]);
   const agent = agentWithCheckpoints(root, store, llm);
@@ -133,17 +133,17 @@ test('agent: rewind restores files and truncates the conversation', async () => 
 
 test('agent: edit previews reach the UI even when no approval is needed', async () => {
   const root = await tmpDir(); await fs.writeFile(path.join(root, 'f.txt'), 'hello world');
-  const llm = fakeLlm([call('edit_file', { path: 'f.txt', old_string: 'world', new_string: 'there' }), text('ok')]);
+  const llm = fakeLlm([call('read_file', { path: 'f.txt' }), call('edit_file', { path: 'f.txt', old_string: 'world', new_string: 'there' }), text('ok')]);
   const previews: any[] = [];
   const ui = recordingUi(); const orig = ui.toolStart;
   ui.toolStart = (id, n, k, a, d, p) => { previews.push(p); orig(id, n, k, a, d, p); };
   await agentWithCheckpoints(root, new CheckpointStore(path.join(await tmpDir(), 'cp')), llm).send('e', AUTO, ui);
-  assert.equal(previews[0].newText, 'hello there');
+  assert.equal(previews.find(Boolean).newText, 'hello there');
 });
 
 test('agent: a failing edit (no match) never asks approval and never writes', async () => {
   const root = await tmpDir(); await fs.writeFile(path.join(root, 'f.txt'), 'abc');
-  const llm = fakeLlm([call('edit_file', { path: 'f.txt', old_string: 'zzz', new_string: 'y' }), text('ok')]);
+  const llm = fakeLlm([call('read_file', { path: 'f.txt' }), call('edit_file', { path: 'f.txt', old_string: 'zzz', new_string: 'y' }), text('ok')]);
   const ui = recordingUi(true);
   await agentWithCheckpoints(root, new CheckpointStore(path.join(await tmpDir(), 'cp')), llm).send('e', { ...AUTO, mode: 'ask' }, ui);
   assert.equal(ui.approvals.length, 0);

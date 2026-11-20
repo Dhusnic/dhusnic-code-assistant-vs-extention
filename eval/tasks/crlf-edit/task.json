@@ -1,0 +1,10 @@
+{
+    "name": "crlf-edit",
+    "prompt": "In src/config.js change the default timeoutMs to 5000 and add a new default `verbose: false`. Keep the file's existing formatting.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "crlf": ["src/config.js"],
+    "mustNotChange": ["test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["edit", "line-endings"]
+}

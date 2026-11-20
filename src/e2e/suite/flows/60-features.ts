@@ -32,7 +32,7 @@ export const flows: Flow[] = [
     async run(t) {
       const file = t.fixture('reviewed.ts', BEFORE);
       const s = await t.newSession();
-      await t.gw.script(callTool('edit_file', { path: file, old_string: 'value = 1', new_string: 'value = 2' }), reply('Edited.'));
+      await t.gw.script(callTool('read_file', { path: file }), callTool('edit_file', { path: file, old_string: 'value = 1', new_string: 'value = 2' }), reply('Edited.'));
       await s.send('Change the value');
       await s.clickText('.approve:not(.done) .actions button', 'Allow');
       await s.waitFor('.msg.assistant .md', { text: 'Edited.' });
@@ -170,6 +170,7 @@ export const flows: Flow[] = [
         await s.clickText('.menu .item', 'Auto-execute');
         await t.gw.script(
           callTool('agent', { description: 'Edit in isolation', prompt: 'Change the value', subagent_type: 'general-purpose' }),
+          callTool('read_file', { path: file }),
           callTool('edit_file', { path: file, old_string: 'value = 1', new_string: 'value = 2' }),
           reply('Changed the value on my branch.'),
           reply('The agent finished.'),

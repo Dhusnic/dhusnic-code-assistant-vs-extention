@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { Agent, DELEGATION_TOOLS } from '../core/agent';
+import { Agent, CheckCommand, DELEGATION_TOOLS } from '../core/agent';
+import { detectVerifyCommands } from '../core/verify';
 import { AgentType, BUILTIN_AGENT_TYPES, loadAgentTypes, toolsForType } from '../core/agentTypes';
 import { NewSkill, Skill, addSkillFile, copySkill, createSkill, deleteSkill, findSkill, lintSkill, loadSkills, setModelInvocation, updateSkill } from '../core/skills';
 import { CheckpointStore } from '../core/checkpoints';
@@ -22,6 +23,11 @@ import { UsageTracker } from '../core/usage';
 import { DiffContentProvider } from './diffProvider';
 import { SessionPanel } from './sessionPanel';
 import { createVsCodeTools } from './vscodeTools';
+import { createNavTools } from './navTools';
+import { ChangeJournal, isArtifactPath } from '../core/changeJournal';
+import { fetchContextWindow } from '../core/modelInfo';
+import { IgnoreMatcher, createIgnore } from '../core/glob';
+import type { WorkspaceRoot } from '../core/tool';
 import type { EditorHost } from './features/editorActions';
 import { SafetyCenter } from './features/guard';
 import { ServerRegistry } from './features/servers';
@@ -29,6 +35,7 @@ import { RemoteService } from './features/remote';
 import { createNotifier } from './features/notifications';
 import type { Scheduler } from './features/scheduler';
 import { createTerminalRunner } from './features/terminalRunner';
+import { WebService } from './features/web';
 
 export const PANEL_TYPE = 'infraonAssistant.session';
 
@@ -65,6 +72,7 @@ export class Hub {
   readonly policyReady: Promise<void>;
   readonly safety: SafetyCenter;
   readonly remote: RemoteService;
+  readonly web: WebService;
   private terminal = createTerminalRunner();
   private memoryCache = new MemoryCache();
   private notifier: ReturnType<typeof createNotifier>;
@@ -80,9 +88,19 @@ export class Hub {
     ctx.subscriptions.push(this.terminal, this.notifier);
     this.remote = new RemoteService({ ctx, servers: this.servers, addKnownSecret: (v, k) => this.safety.addKnownSecret(v, k), onStatus: () => this.scheduleRefresh() });
     this.safety.remoteResolve = (server) => this.remote.resolveName(server);
+    this.safety.workspaceRoots = () => this.workspaceRoots().map((r) => r.path);
     ctx.subscriptions.push(this.remote);
     // Saved server passwords are masked from the first message on, even before the agent connects.
     void this.remote.preloadSecrets();
+    const hub = this;
+    this.web = new WebService({
+      ctx, output: this.output,
+      get cfg() { return hub.cfg; }, get policy() { return hub.policy; }, get models() { return hub.models; }, get routing() { return hub.routing; },
+      llmFor: (sid) => this.llmFor(sid), llmConfig: (m, p) => this.llmConfig(m, p), routeModel: (t, s) => this.routeModel(t, s),
+      defaultModel: () => this.defaults().model,
+    });
+    this.safety.web = { policy: () => this.web.policy(), approved: (sid) => this.web.approved(sid) };
+    ctx.subscriptions.push(this.web);
     this.policyReady = loadPolicy({ url: this.cfg.get<string>('policyUrl', '') || undefined, cacheFile: path.join(ctx.globalStorageUri.fsPath, 'policy-cache.json') }).then((r) => {
       this.policy = r.policy;
       for (const e of r.errors) { this.output.appendLine(`[policy] ${e}`); }
@@ -94,6 +112,7 @@ export class Hub {
     const watcher = vscode.workspace.createFileSystemWatcher('**/*', false, true, false);
     watcher.onDidCreate(() => this.index.invalidate());
     watcher.onDidDelete(() => this.index.invalidate());
+    this.watchChanges();
     this.mcp = new McpManager(this.root);
     ctx.subscriptions.push(watcher, { dispose: () => this.mcp.stopAll() }, vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('infraonAssistant.searchEngine') || e.affectsConfiguration('infraonAssistant.ripgrepPath')) { void this.initSearch(); }
@@ -126,6 +145,7 @@ export class Hub {
     });
   }
 
+  /** The primary workspace folder (the first); other folders of a multi-root workspace are reached through workspaceRoots. */
   get root(): string { return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(); }
   get cfg(): vscode.WorkspaceConfiguration { return vscode.workspace.getConfiguration('infraonAssistant'); }
   get media(): vscode.Uri { return vscode.Uri.joinPath(this.ctx.extensionUri, 'media'); }
@@ -259,7 +279,8 @@ export class Hub {
     }));
   }
 
-  private allTools() { return [...this.fsTools, ...createVsCodeTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.mcp.tools()]; }
+  /** Every tool an agent of session `sid` can use (web tools keep their sources and approvals per session). */
+  private allTools(sid = '_shared') { return [...this.fsTools, ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.mcp.tools()]; }
 
   checkpointsFor(sid: string, aid: string): CheckpointStore { return new CheckpointStore(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid, aid)); }
 
@@ -313,6 +334,56 @@ export class Hub {
     if (s.main().status === 'error') { throw new Error(s.main().error ?? 'The scheduled task failed.'); }
   }
 
+  /** Commands that check the project after the agent changes code: the user's setting, else INFRAON.md, else detected. */
+  private async projectChecks(root: string): Promise<CheckCommand[]> {
+    if (!this.cfg.get<boolean>('autoVerify', true)) { return []; }
+    const custom = (this.cfg.get<unknown[]>('verifyCommands', []) ?? []).filter((c): c is string => typeof c === 'string' && !!c.trim());
+    if (custom.length) { return custom.map((command) => ({ name: 'verify', command: command.trim(), timeoutSeconds: 600 })); }
+    return detectVerifyCommands(root);
+  }
+
+  /** Every file change in the workspace, from any source, so the agents' checks also cover commands and sub-agents. */
+  private readonly journal = new ChangeJournal();
+  private readonly gitignores = new Map<string, IgnoreMatcher | undefined>();
+
+  private watchChanges(): void {
+    const loadIgnore = async (root: string) => {
+      try { this.gitignores.set(root, createIgnore((await fs.readFile(path.join(root, '.gitignore'), 'utf8')).split('\n'))); } catch { this.gitignores.set(root, undefined); }
+    };
+    for (const f of vscode.workspace.workspaceFolders ?? []) { void loadIgnore(f.uri.fsPath); }
+    const w = vscode.workspace.createFileSystemWatcher('**/*');
+    const on = (uri: vscode.Uri) => {
+      if (uri.scheme !== 'file') { return; }
+      const folder = vscode.workspace.getWorkspaceFolder(uri);
+      if (!folder) { return; }
+      const root = folder.uri.fsPath;
+      const rel = path.relative(root, uri.fsPath);
+      if (rel === '.gitignore') { void loadIgnore(root); }
+      if (!rel || rel.startsWith('..') || isArtifactPath(rel, this.gitignores.get(root))) { return; }
+      this.journal.record(uri.fsPath);
+    };
+    w.onDidChange(on); w.onDidCreate(on); w.onDidDelete(on);
+    this.ctx.subscriptions.push(w);
+  }
+
+  /** Context window per model, as the gateway reports it (undefined: not reported). */
+  private readonly contextWindows = new Map<string, number | undefined>();
+  private lastModel?: string;
+
+  /** The context window to plan for: the user's setting when set explicitly, else what the gateway reports, else 256k. */
+  contextWindow(): number {
+    const set = this.cfg.inspect<number>('contextWindow');
+    const explicit = set?.workspaceFolderValue ?? set?.workspaceValue ?? set?.globalValue;
+    if (typeof explicit === 'number' && explicit > 0) { return explicit; }
+    const reported = this.lastModel ? this.contextWindows.get(this.lastModel) : undefined;
+    return reported ?? this.cfg.get<number>('contextWindow', 262144);
+  }
+
+  /** All workspace folders (multi-root workspaces have several). */
+  workspaceRoots(): WorkspaceRoot[] {
+    return (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, path: f.uri.fsPath }));
+  }
+
   /** Main agents can delegate (agent / send_message); sub-agents get their type's tools and prompt and cannot. */
   private createAgent(sid: string, aid: string, spec: AgentSpec = { role: 'main' }): Agent {
     const checkpoints = this.checkpointsFor(sid, aid);
@@ -329,11 +400,16 @@ export class Hub {
       guard: this.safety.guardFor(sid, aid, root, !!sub),
       llm: this.llmFor(sid),
       getConfig: (o) => this.llmConfig(o.model),
-      tools: () => (sub ? toolsForType(this.allTools(), sub, DELEGATION_TOOLS) : this.allTools()),
+      tools: () => (sub ? toolsForType(this.allTools(sid), sub, DELEGATION_TOOLS) : this.allTools(sid)),
       memory: () => this.loadMemory(),
+      checks: sub ? undefined : () => this.projectChecks(root),
+      // An agent in its own worktree works outside the workspace: workspace changes and folders are not its own.
+      fileChanges: root === this.root ? this.journal : undefined,
+      roots: root === this.root ? () => this.workspaceRoots() : undefined,
+      limits: () => ({ maxIterations: this.cfg.get<number>('maxIterations', 0), maxTokens: this.cfg.get<number>('maxOutputTokens', 0) }),
       snapshot: (turn, abs) => checkpoints.snapshot(turn, abs),
       restore: (turn) => checkpoints.restore(turn),
-      contextLimit: () => this.cfg.get<number>('contextWindow', 262144),
+      contextLimit: () => this.contextWindow(),
       compactRatio: () => this.cfg.get<number>('autoCompactThreshold', 0.75),
       activeFile: () => {
         const ed = vscode.window.activeTextEditor;
@@ -381,7 +457,20 @@ export class Hub {
     if (!apiKey) { throw new Error('No API key set. Run "Infraon Assistant: Set API Key".'); }
     const chosen = this.allowedModel(model || this.defaults().model);
     if (!isModelAllowed(this.policy, chosen)) { throw new Error(`Your organization's policy does not allow the model "${chosen}".`); }
-    return { baseUrl: this.policy.baseUrl ?? this.cfg.get('baseUrl', ''), model: chosen, apiKey, temperature: 0.2, allowSelfSigned: this.policy.allowSelfSignedTls ?? this.cfg.get('allowSelfSignedTls', true) };
+    const idle = this.cfg.get<number>('llmIdleTimeoutSeconds', 180);
+    const cfg: LlmConfig = {
+      baseUrl: this.policy.baseUrl ?? this.cfg.get('baseUrl', ''), model: chosen, apiKey, temperature: 0.2,
+      allowSelfSigned: this.policy.allowSelfSignedTls ?? this.cfg.get('allowSelfSignedTls', true),
+      idleTimeoutMs: idle > 0 ? idle * 1000 : undefined,
+    };
+    // Ask the gateway once per model how big its context window really is (vLLM reports max_model_len).
+    if (!this.contextWindows.has(chosen)) {
+      this.contextWindows.set(chosen, await fetchContextWindow(cfg, chosen));
+      const w = this.contextWindows.get(chosen);
+      this.output.appendLine(`[llm] ${chosen}: context window ${w ? `${w} tokens (reported by the gateway)` : 'not reported; using the Context Window setting'}`);
+    }
+    this.lastModel = chosen;
+    return cfg;
   }
 
   /** The project memory file in use (CLAUDE.md, INFRAON.md or AGENTS.md), shown in the context popup. */

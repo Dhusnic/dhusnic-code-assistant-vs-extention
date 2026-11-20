@@ -4,11 +4,26 @@ export type ToolKind = 'read' | 'edit' | 'exec' | 'meta';
 
 export interface ApprovalPreview { path: string; oldText: string; newText: string }
 
+/** One folder of a (possibly multi-root) VS Code workspace. */
+export interface WorkspaceRoot { name: string; path: string }
+
 export interface ToolCtx {
   root: string;
+  /** Every workspace folder, the primary one (root) included. Missing or one entry: a single-root workspace. */
+  roots?: WorkspaceRoot[];
   signal: AbortSignal;
   /** Called before a file is modified so checkpoints can capture the original. */
   snapshot: (absPath: string) => Promise<void>;
+  /** Tracks what the agent has read; edit tools refuse to change a file it has not read, or that changed since. */
+  reads?: ReadTracker;
+}
+
+export interface ReadTracker {
+  markRead(absPath: string): Promise<void>;
+  /** An error message when the file exists but was not read, or changed on disk since it was read. */
+  check(absPath: string, displayPath: string): Promise<string | undefined>;
+  /** The agent itself just wrote the file: its new contents count as read. */
+  markWritten(absPath: string): Promise<void>;
 }
 
 export interface Tool {

@@ -1,0 +1,9 @@
+{
+    "name": "add-feature",
+    "prompt": "Add a --json option to the `list` command in src/cli.js: it prints the listed items as a JSON array of {name, count} objects, pretty-printed with 2-space indentation. It must work together with the existing --all option, in any order. Tests for it are already in test/cli.test.js.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "mustNotChange": ["test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["feature"]
+}

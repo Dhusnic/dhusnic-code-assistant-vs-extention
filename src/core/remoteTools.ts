@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { randomBytes } from 'crypto';
-import { clip, resolveSafe } from './fstools';
+import { clip, clipOutput, resolveSafe } from './fstools';
 import { DEFAULT_TIMEOUT_MS, SshPool, SshTarget } from './ssh';
 import { Tool, fnSpec } from './tool';
 
@@ -281,7 +281,7 @@ export function createRemoteTools(host: RemoteHost): { tools: Tool[]; jobs: () =
         const timeoutMs = Math.min(MAX_TIMEOUT_S, Math.max(1, Number(a.timeout_seconds) || DEFAULT_TIMEOUT_MS / 1000)) * 1000;
         const r = await host.pool.exec(t, command, { cwd, stdin, timeoutMs, signal: ctx.signal });
         if (r.cancelled) { throw new Error('Cancelled'); }
-        return clip(`${r.output.replace(/\s+$/, '') || '(no output)'}\n${summary(r)}${r.timedOut ? '\nThe command was stopped at the time limit. Rerun it with background: true if it needs longer.' : ''}`);
+        return `${clipOutput(r.output.replace(/\s+$/, '')) || '(no output)'}\n${summary(r)}${r.timedOut ? '\nThe command was stopped at the time limit. Rerun it with background: true if it needs longer.' : ''}`;
       },
     },
     {

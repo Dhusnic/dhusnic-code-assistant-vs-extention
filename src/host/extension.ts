@@ -73,6 +73,7 @@ export function activate(context: vscode.ExtensionContext): void {
     status.show();
   };
   refreshStatus();
+  void importInstallerKey(context);
 
   context.subscriptions.push(
     status,
@@ -102,6 +103,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('infraonAssistant.editMemory', async () => (await workbench()).editMemory(await hub())),
     vscode.commands.registerCommand('infraonAssistant.openPermissions', async () => (await workbench()).editPermissions(await hub())),
     vscode.commands.registerCommand('infraonAssistant.forgetHostKey', async () => (await hub()).remote.forgetHostKey()),
+    vscode.commands.registerCommand('infraonAssistant.setWebApiKey', async () => (await hub()).web.setKey()),
+    vscode.commands.registerCommand('infraonAssistant.clearWebCache', async () => { void vscode.window.showInformationMessage(await (await hub()).web.clearCache()); }),
     vscode.commands.registerCommand('infraonAssistant.manageSchedules', async () => (await (await hub()).getScheduler()).manage()),
     vscode.commands.registerCommand('infraonAssistant.manageServers', async () => {
       await vscode.commands.executeCommand('infraonAssistant.sessions.focus');
@@ -119,6 +122,24 @@ export function activate(context: vscode.ExtensionContext): void {
   if (context.extensionMode === vscode.ExtensionMode.Test) {
     context.subscriptions.push(vscode.commands.registerCommand('infraonAssistant._test', () => getCore(context)));
   }
+}
+
+/**
+ * The Windows installer cannot write VS Code's encrypted secret store, so it leaves the key in
+ * %USERPROFILE%\.infraon-assistant\setup.json. The first activation moves it into SecretStorage and deletes the file.
+ */
+async function importInstallerKey(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const file = (require('path') as typeof import('path')).join((require('os') as typeof import('os')).homedir(), '.infraon-assistant', 'setup.json');
+    if (!fs.existsSync(file)) { return; }
+    const data = JSON.parse(fs.readFileSync(file, 'utf8')) as { apiKey?: string };
+    if (data.apiKey && !(await context.secrets.get(KEY_SECRET))) {
+      await context.secrets.store(KEY_SECRET, data.apiKey.trim());
+      void vscode.window.showInformationMessage('Infraon Assistant is ready: your API key was configured by the installer.');
+    }
+    fs.rmSync(file, { force: true });
+  } catch { /* leave the file; "Set API Key" still works */ }
 }
 
 /** Starts a new session tab with the selected code as its first message. */

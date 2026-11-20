@@ -1,0 +1,9 @@
+{
+    "name": "fix-off-by-one",
+    "prompt": "The tests for src/paginate.js are failing. Pages are numbered from 1. Fix the bugs so the tests pass.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "mustNotChange": ["test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "failing-test"]
+}
