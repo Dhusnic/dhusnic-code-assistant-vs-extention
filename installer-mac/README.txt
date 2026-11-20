@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.25.0 - INSTALL OR UPDATE (macOS)
+INFRAON CODE ASSISTANT 0.26.0 - INSTALL OR UPDATE (macOS)
 
 First install
 1. Double-click the zip to extract it.
@@ -27,13 +27,13 @@ What the installer does
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
 
-New in 0.25.0: long tasks run to the end
-- An agent can now take up to 1200 tool steps per request (was 50-120), so big jobs such as building a
-  project no longer stop halfway with "Send continue". Setting: infraonAssistant.maxIterations
-  (0 = the old per-effort limits).
-- The Tasks card keeps up: the agent marks each step done as it goes, instead of leaving all the work
-  under step 1. A step left open when the agent stops shows as paused, not as an endless spinner.
-- Projects the agent creates from scratch are tested automatically before it finishes.
+New in 0.26.0: automatic updates
+- This is the last update you install by hand. From now on, new versions are published on the Infraon
+  gateway server and the assistant installs them by itself (checked at start-up and every 4 hours).
+  When one is installed you are asked to reload the window; it never interrupts a running agent.
+- Check right away: Cmd+Shift+P -> "Infraon Assistant: Check for Updates".
+- Every update is signed and verified before it is installed. Prefer to be asked first? Set
+  infraonAssistant.autoUpdate to false.
 
 Notes
 - Do NOT double-click the .vsix file. Always run Install-InfraonAssistant.command (or install.sh).

@@ -1,14 +1,14 @@
 Hi team 👋
 
-Infraon Code Assistant 0.25.0 is out. Long tasks now run to the end, and the task list keeps up 🚀
+Infraon Code Assistant 0.26.0 is out. From now on it updates itself 🚀
 
 🆕 What's new
-• Long tasks run to the end: an agent can now take up to 1200 steps per request (was 50–120), so building a whole feature or project no longer stops halfway with "Send continue"
-• The Tasks card keeps up: the agent marks each step done as it works, instead of piling everything under step 1
-• A step left open when the agent stops now shows as paused, not as an endless spinner
-• Projects the agent creates from scratch get their tests run automatically before it finishes
+• Automatic updates: this is the last time you install an update by hand. New versions now install by themselves from our gateway server, and you just click "Reload Now" when asked
+• The reload prompt waits until your agents finish, so nothing gets interrupted
+• Want it now? Ctrl+Shift+P → "Infraon Assistant: Check for Updates"
+• Every update is signed and verified before it's installed
 
-🔄 Already installed? Update in 1 minute
+🔄 Already installed? One last manual update (1 minute)
 1. Download and extract the attached zip: InfraonCodeAssistant-Installer.zip
 2. Double-click Install-InfraonAssistant.bat
 3. That's it. It detects your installed version and updates it. Your API key and settings are kept, so nothing is asked.
