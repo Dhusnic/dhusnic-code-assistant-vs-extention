@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.24.0 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.26.0 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -22,12 +22,13 @@ What the installer does
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
 
-New in 0.24.0: internet access for research
-- The assistant can search the web, read pages, PDFs, Word/Excel/PowerPoint files and images, and
-  look up papers, packages, vulnerabilities, GitHub repos and RFCs, with numbered citations.
-- Try:  /research <topic>   /sources   /web
-- The first request to a new website asks for your approval.
-- Optional: /web key to add a search API key (Brave, Tavily, Bing or Google) for better search results.
+New in 0.26.0: automatic updates
+- This is the last update you install by hand. From now on, new versions are published on the Infraon
+  gateway server and the assistant installs them by itself (checked at start-up and every 4 hours).
+  When one is installed you are asked to reload the window; it never interrupts a running agent.
+- Check right away: Ctrl+Shift+P -> "Infraon Assistant: Check for Updates".
+- Every update is signed and verified before it is installed. Prefer to be asked first? Set
+  infraonAssistant.autoUpdate to false.
 
 Notes
 - Do NOT double-click the .vsix file. Windows opens it in the Visual Studio installer, which fails.

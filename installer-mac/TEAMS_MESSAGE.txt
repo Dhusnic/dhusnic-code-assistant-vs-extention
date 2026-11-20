@@ -1,35 +1,34 @@
 Hi team 👋
 
-Infraon Code Assistant 0.24.0 is out for Mac. The assistant can now use the internet for research 🌐
+Infraon Code Assistant 0.26.0 is out, and from now on it updates itself 🚀
 
 🆕 What's new
-• Searches the web and reads pages, PDFs, Word/Excel/PowerPoint files and images
-• Looks up research papers, npm/PyPI/Maven packages, known vulnerabilities (CVEs), GitHub repos and RFCs
-• /research <topic> writes a cited report into your project's research folder
-• Every answer cites its sources as [1], [2]…; /sources lists them
-• Safe by default: the first request to a new website asks for your approval, and secrets are never sent out
+• Automatic updates: this is the last time you install an update by hand. New versions now install by themselves from our gateway server, and you just click "Reload Now" when asked
+• The reload prompt waits until your agents finish, so nothing gets interrupted
+• Want to check now? Ctrl+Shift+P (Mac: Cmd+Shift+P) → "Infraon Assistant: Check for Updates"
+• Every update is signed and verified before it's installed
 
-🔄 Already installed? Update in 1 minute
-1. Download and extract the attached zip: InfraonCodeAssistant-Mac-Installer.zip
+⬇️ Download (office network / VPN only)
+• Windows: https://172.16.48.75:30400/infraon-assistant/downloads/InfraonCodeAssistant-Installer.zip
+• Mac: https://172.16.48.75:30400/infraon-assistant/downloads/InfraonCodeAssistant-Mac-Installer.zip
+If your browser says "Your connection is not private", that's expected: our server uses an internal certificate. Click Advanced → Proceed to 172.16.48.75.
+
+🪟 Windows: install or update (1 minute)
+1. Right-click the downloaded zip → Extract All
+2. Double-click Install-InfraonAssistant.bat (SmartScreen warning: More info → Run anyway)
+3. Already installed: nothing is asked, and your API key and settings are kept. New user: paste your API key when asked
+4. If VS Code was open: Ctrl+Shift+P → "Developer: Reload Window"
+
+🍎 Mac: install or update (1 minute)
+1. Double-click the downloaded zip to extract it
 2. Right-click Install-InfraonAssistant.command → Open → Open
-3. That's it. It detects your installed version and updates it. Your API key and settings are kept, so nothing is asked.
+3. Already installed: nothing is asked. New user: paste your API key when asked
 4. If VS Code was open: Cmd+Shift+P → "Developer: Reload Window"
-
-🍎 New user? Install in 2 minutes
-1. Extract the zip, right-click Install-InfraonAssistant.command → Open → Open (first time only, macOS asks for confirmation)
-2. Paste your API key when it asks (the only question)
-3. VS Code opens. Click the "Infraon Assistant" icon on the left bar
-
 If the .command doesn't open: open Terminal, type "bash " (with a space), drag install.sh into the window, press Return.
 
 ⚠️ Notes
-• Connect to the office network / VPN first.
-• Don't double-click the .vsix file, only run the .command / install.sh.
-• Need to change your key? Cmd+Shift+P → "Infraon Assistant: Set API Key"
+• Run only the installer (.bat / .command). Don't double-click the .vsix file.
+• Need to change your key? Ctrl/Cmd+Shift+P → "Infraon Assistant: Set API Key"
 • Don't share your API key in chat. Ask me for yours if you don't have one.
 
-Windows users: use the separate Windows installer zip.
-
-Try it: /research Compare Kafka, Pulsar and NATS for event streaming
-
-Problems? Reply here with a screenshot of the Terminal window. Thanks!
+Problems? Reply here with a screenshot of the installer window. Thanks!

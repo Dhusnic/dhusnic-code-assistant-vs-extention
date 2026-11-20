@@ -4,7 +4,7 @@ import { parseTextToolCalls } from './textToolCalls';
 import { ApprovalPreview, Tool, ToolKind, fnSpec } from './tool';
 import { AgentType, BUILTIN_AGENT_TYPES, DEFAULT_AGENT_TYPE } from './agentTypes';
 import { Answers, MAX_OPTIONS, MAX_QUESTIONS, UserQuestion, formatAnswers, validateQuestions } from './questions';
-import { MAX_TODOS, TodoInput, formatTodos, validateTodos } from './todos';
+import { MAX_TODOS, TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoReminder, unfinishedTodos, validateTodos } from './todos';
 import { SKILL_TOOL, Skill, expandSkill, findSkill, skillToolSpec } from './skills';
 import { Effort, Mode, effortParams, isAllowed, requiresApproval } from './policy';
 import { BASE_PROMPT, FANOUT_PROMPT, environmentSection } from './prompts';
@@ -536,6 +536,9 @@ export class Agent {
     let checkRounds = 0;
     let cutOffs = 0;
     let overflows = 0;
+    /** Tool rounds in this turn, and whether the end-of-turn task-list reminder was sent. */
+    let toolRounds = 0;
+    let todoEndNudged = false;
     /** Files changed since the checks last ran. */
     let dirty = false;
     this.track = { changed: new Set(), abs: new Set(), verified: [] };
@@ -545,7 +548,7 @@ export class Agent {
     const early = this.takePending();
     if (early.length) { dirty = true; this.noteChanged(early); }
     try {
-      const checks = await this.loadChecks();
+      let checks = await this.loadChecks();
       const checksSection = checksPromptSection(checks);
       const submitted = await this.deps.guard?.onPrompt?.(userText, signal);
       if (submitted?.blocked) {
@@ -613,6 +616,8 @@ export class Agent {
         if (!res.toolCalls.length) {
           // A message queued during this reply is answered right away, in the same turn.
           if (this.hasQueued()) { continue; }
+          // A project created during this turn (no package.json etc. when it started) gets its checks detected now.
+          if (dirty && !checks.length) { checks = await this.loadChecks(); }
           const scoped = dirty ? scopeChecks(checks, [...this.track.changed]) : [];
           if (dirty && checks.length && !scoped.length) { dirty = false; ui.info('Only documentation changed: project checks skipped.'); }
           // The model already ran every check after its last change and they passed: no need to run them again.
@@ -631,6 +636,15 @@ export class Agent {
                 continue;
               }
               ui.info(`Project checks are still failing (${failed.name}: ${failed.command}) after ${MAX_CHECK_ROUNDS} fix attempts. Review the output above.`);
+            }
+          }
+          // Ending a working turn with steps still open leaves the list (and the UI) stuck on a step: ask once to settle it.
+          if (!todoEndNudged && toolRounds > 0 && !this.deps.subagent && run.mode !== 'plan') {
+            const { todos } = this.todoState();
+            if (todos && unfinishedTodos(todos).length) {
+              todoEndNudged = true;
+              this.history.push({ role: 'user', content: todoEndReminder(todos), display: 'Task list has unfinished steps: asked to update it' });
+              continue;
             }
           }
           const stop = await this.deps.guard?.onStop?.(signal);
@@ -653,6 +667,13 @@ export class Agent {
             // A command that changed files (a formatter, a code generator) is a change, not a check.
             if (this.noteResult(tc.function.name, tc.function.arguments, results[j], external.length > 0)) { dirty = true; }
           });
+        }
+        toolRounds++;
+        // The task list went stale (many rounds without todo_write): remind the model inside the last tool result.
+        const nudge = this.todoNudge();
+        if (nudge) {
+          const last = this.history[this.history.length - 1];
+          if (last?.role === 'tool') { last.content = `${last.content ?? ''}\n\n${nudge}`; }
         }
       }
       ui.info(`Stopped after ${ep.maxIterations} tool rounds. Send "continue" to let the agent carry on (or raise Max Iterations in settings).`);
@@ -878,6 +899,35 @@ export class Agent {
     if (!s) { return finish(false, `ERROR: no skill named "${name}". Available: ${all.filter((x) => x.modelInvocable).map((x) => x.name).join(', ') || 'none'}.`); }
     if (!s.modelInvocable) { return finish(false, `ERROR: the skill "${s.name}" can only be started by the user (/${s.name}). Tell the user they can run it.`); }
     return finish(true, `Skill "${s.name}" loaded. Follow these instructions to complete the user's request:\n\n${expandSkill(s, String(args.args ?? ''))}`);
+  }
+
+  /**
+   * The latest valid task list in the conversation and how many tool rounds the model has done since writing it.
+   * Read from the history, so it also holds for a restored session.
+   */
+  todoState(): { todos?: TodoInput[]; rounds: number } {
+    let rounds = 0;
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const m = this.history[i];
+      if (m.role !== 'assistant' || !m.tool_calls?.length) { continue; }
+      const tc = [...m.tool_calls].reverse().find((c) => c.function.name === TODO_TOOL);
+      if (tc) {
+        let args: unknown = {};
+        try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* invalid: keep looking further back */ }
+        const v = validateTodos(args);
+        if (v.todos) { return { todos: v.todos, rounds }; }
+      }
+      rounds++;
+    }
+    return { rounds };
+  }
+
+  /** A reminder to append to this round's last tool result when the task list has gone stale, else ''. */
+  private todoNudge(): string {
+    if (this.deps.subagent) { return ''; }
+    const { todos, rounds } = this.todoState();
+    if (!todos || !unfinishedTodos(todos).length || rounds === 0 || rounds % TODO_REMINDER_ROUNDS !== 0) { return ''; }
+    return todoReminder(todos, rounds);
   }
 
   /** todo_write: replaces the task list shown to the user. */

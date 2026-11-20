@@ -24,6 +24,8 @@ export interface CentralPolicy {
   redactSecrets?: boolean; auditLog?: boolean; routing?: RoutingConfig;
   /** Internet access: domain lists, approvals, downloads, quotas (see web/policy.ts). */
   web?: PolicyWeb;
+  /** Self-update: true turns it off; updateUrl replaces the manifest URL derived from baseUrl. */
+  disableAutoUpdate?: boolean; updateUrl?: string;
 }
 export type PolicySource = 'env' | 'machine' | 'url' | 'cache' | 'none';
 export interface LoadedPolicy { policy: CentralPolicy; source: PolicySource; errors: string[]; location?: string }
@@ -86,7 +88,7 @@ export function validatePolicy(raw: unknown): { policy: CentralPolicy; errors: s
   if (!isObject(raw)) { return { policy: restrictedPolicy(), errors: ['policy must be a JSON object'] }; }
   const errors: string[] = [];
   const policy: CentralPolicy = {};
-  const flag = (key: 'allowSelfSignedTls' | 'disableAutoMode' | 'redactSecrets' | 'auditLog', closed: boolean): void => {
+  const flag = (key: 'allowSelfSignedTls' | 'disableAutoMode' | 'redactSecrets' | 'auditLog' | 'disableAutoUpdate', closed: boolean): void => {
     const v = raw[key];
     if (v === undefined) { return; }
     if (typeof v === 'boolean') { policy[key] = v; return; }
@@ -104,6 +106,10 @@ export function validatePolicy(raw: unknown): { policy: CentralPolicy; errors: s
   flag('disableAutoMode', true);
   flag('redactSecrets', true);
   flag('auditLog', true);
+  flag('disableAutoUpdate', true);
+  if (raw.updateUrl !== undefined) {
+    if (validUrl(raw.updateUrl)) { policy.updateUrl = raw.updateUrl as string; } else { errors.push('updateUrl must be an http(s) URL without credentials'); }
+  }
   allowList('allowedModels');
   allowList('mcpAllowlist');
   if (raw.baseUrl !== undefined) {
