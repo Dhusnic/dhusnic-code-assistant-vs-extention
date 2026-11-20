@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { Hub } from './hub';
 import type { SidebarView } from './sidebarView';
 import type { InlineCompletionProvider } from './completions';
+import type { Updater } from './updater';
 
 /**
  * Activation must stay tiny: this file statically imports only `vscode`. Everything else (the hub, agents, search,
@@ -111,6 +112,22 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('infraonAssistant.inlineCompletions')) { refreshStatus(); } }),
   );
+  // Self-update: the updater module loads 30 s after start-up (or on the command), never during activation.
+  let updater: Updater | undefined;
+  const getUpdater = async (): Promise<Updater> => {
+    if (!updater) {
+      const { Updater: U } = await import('./updater');
+      updater ??= new U(context, agentsBusy);
+      context.subscriptions.push(updater);
+    }
+    return updater;
+  };
+  if (context.extensionMode !== vscode.ExtensionMode.Test) {
+    const updateTimer = setTimeout(() => { getUpdater().then((u) => u.start(), () => undefined); }, 30_000);
+    updateTimer.unref?.();
+    context.subscriptions.push({ dispose: () => clearTimeout(updateTimer) });
+  }
+  context.subscriptions.push(vscode.commands.registerCommand('infraonAssistant.checkForUpdates', async () => (await getUpdater()).check(true)));
   // The scheduler loads only in workspaces that actually have scheduled tasks.
   if (context.storageUri) {
     const timer = setTimeout(() => {
@@ -142,6 +159,11 @@ async function importInstallerKey(context: vscode.ExtensionContext): Promise<voi
     }
     fs.rmSync(file, { force: true });
   } catch { /* leave the file; "Set API Key" still works */ }
+}
+
+/** True while any agent is running or waiting; an update's reload prompt waits for it. False before the hub loads. */
+function agentsBusy(): boolean {
+  return !!loaded?.hub.manager.snapshot().some((s) => s.agents.some((a) => a.status === 'running' || a.status === 'waiting' || a.status === 'queued'));
 }
 
 /** Starts a new session tab with the selected code as its first message. */

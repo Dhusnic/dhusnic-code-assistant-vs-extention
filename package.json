@@ -41,6 +41,10 @@
                 "title": "Infraon Assistant: Set API Key"
             },
             {
+                "command": "infraonAssistant.checkForUpdates",
+                "title": "Infraon Assistant: Check for Updates"
+            },
+            {
                 "command": "infraonAssistant.explainSelection",
                 "title": "Infraon Assistant: Explain Selection"
             },
@@ -344,6 +348,16 @@
                     "type": "string",
                     "default": "",
                     "description": "Optional URL of the central policy file. A policy installed on the machine takes priority."
+                },
+                "infraonAssistant.autoUpdate": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Install new versions published on the company server automatically (you are asked to reload the window). When off, you are asked before installing."
+                },
+                "infraonAssistant.updateUrl": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional URL of the update manifest. Empty: https://<gateway host>/infraon-assistant/updates/latest.json, taken from the base URL."
                 },
                 "infraonAssistant.autoVerify": {
                     "type": "boolean",
