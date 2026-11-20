@@ -40,21 +40,26 @@ function main() {
 
   const keyFile = path.resolve(o.key ?? path.join(os.homedir(), '.infraon-signing', 'update-signing-key.pem'));
   const privateKey = crypto.createPrivateKey(fs.readFileSync(keyFile));
-  // Refuse to sign with a key the shipped extension would not accept.
-  const shipped = /-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/.exec(fs.readFileSync(path.join(root, 'src', 'core', 'updateKey.ts'), 'utf8'));
-  const derived = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString().trim();
-  if (!shipped || shipped[0].replace(/\r/g, '') !== derived.replace(/\r/g, '')) { throw new Error(`${keyFile} does not match the public key in src/core/updateKey.ts`); }
+  // Refuse to sign with a key the shipped extension would not accept (any key in UPDATE_PUBLIC_KEYS).
+  const shipped = (fs.readFileSync(path.join(root, 'src', 'core', 'updateKey.ts'), 'utf8').match(/-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/g) || [])
+    .map((k) => k.replace(/\r/g, '').trim());
+  const derived = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString().replace(/\r/g, '').trim();
+  if (!shipped.includes(derived)) { throw new Error(`${keyFile} does not match any public key in src/core/updateKey.ts`); }
 
   const body = fs.readFileSync(vsix);
   const sha256 = crypto.createHash('sha256').update(body).digest('hex');
-  const message = Buffer.from(`infraon-code-assistant\n${version}\n${sha256}\n`, 'utf8');   // must match signedMessage() in src/core/updater.ts
-  const signature = crypto.sign(null, message, privateKey).toString('base64');
+  const source = path.basename(vsix);
+  const notes = o.notes ? o.notes.trim() : undefined;
+  if (notes && notes.length > 2000) { throw new Error('--notes is longer than 2000 characters'); }
+  // Every field the client acts on is signed. Must match signedMessage() in src/core/updater.ts (a test checks this).
+  const canonical = JSON.stringify([version, source, sha256, minVscode || null, o.mandatory, notes || null]);
+  const signature = crypto.sign(null, Buffer.from(`infraon-code-assistant update v2\n${canonical}`, 'utf8'), privateKey).toString('base64');
 
   fs.mkdirSync(o.out, { recursive: true });
   fs.copyFileSync(vsix, path.join(o.out, path.basename(vsix)));
   const manifest = {
-    version, url: path.basename(vsix), sha256, signature, minVscode, mandatory: o.mandatory,
-    ...(o.notes ? { notes: o.notes } : {}), publishedAt: new Date().toISOString(),
+    version, url: source, sha256, signature, minVscode, mandatory: o.mandatory,
+    ...(notes ? { notes } : {}), publishedAt: new Date().toISOString(),
   };
   fs.writeFileSync(path.join(o.out, 'latest.json'), JSON.stringify(manifest, null, 2) + '\n');
   console.log(`Signed ${version} (sha256 ${sha256.slice(0, 12)}…) -> ${path.resolve(o.out)}`);

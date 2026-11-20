@@ -352,7 +352,7 @@
                 "infraonAssistant.autoUpdate": {
                     "type": "boolean",
                     "default": true,
-                    "description": "Install new versions published on the company server automatically (you are asked to reload the window). When off, you are asked before installing."
+                    "description": "Install new versions published on the company server automatically (you are asked to reload the window). When off, new versions are announced and installed only when you click Install. Read from user settings only."
                 },
                 "infraonAssistant.updateUrl": {
                     "type": "string",
