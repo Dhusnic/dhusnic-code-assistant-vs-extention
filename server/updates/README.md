@@ -24,6 +24,13 @@ Checking the route: `curl -k https://172.16.48.75:30400/infraon-assistant/update
 
 `-Mandatory` makes the reload prompt modal, so users can't postpone it. You can set `INFRAON_UPDATE_TARGET` once instead of passing `-PublishTarget`. If no target is set, the signed files are staged in `dist\updates\` for you to copy manually: copy the `.vsix` first, then `latest.json`.
 
+## Installer downloads (first installs)
+
+Copy `InfraonCodeAssistant-Installer.zip` and `InfraonCodeAssistant-Mac-Installer.zip` from the repo root to `/srv/infraon-assistant/downloads/`. The Teams message links to:
+
+- https://172.16.48.75:30400/infraon-assistant/downloads/InfraonCodeAssistant-Installer.zip
+- https://172.16.48.75:30400/infraon-assistant/downloads/InfraonCodeAssistant-Mac-Installer.zip
+
 ## Signing key
 
 - The private key is in `%USERPROFILE%\.infraon-signing\update-signing-key.pem` on the build machine. **Back it up somewhere safe.** If it's lost, every installed copy has to be updated by hand once with the installer.
