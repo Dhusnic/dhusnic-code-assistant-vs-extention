@@ -7,6 +7,7 @@ const LIST = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor
 const PLUS = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.35 2h1.3v5.35H14v1.3H8.65V14h-1.3V8.65H2v-1.3h5.35z"/></svg>';
 const SUMMARY = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 1.8h5.5L12.5 5v9.2H4z"/><path d="M9.3 1.8V5h3.2M6 8h4.5M6 10.3h4.5M6 12.5h2.8"/></svg>';
 const BOLT = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M9 1.5L3.5 9h4L7 14.5 12.5 7h-4z"/></svg>';
+const MAP = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="6" width="4.5" height="4" rx="1"/><rect x="10" y="1.5" width="4.5" height="3.5" rx="1"/><rect x="10" y="11" width="4.5" height="3.5" rx="1"/><path d="M6 8h2M8 3.25V12.75M8 3.25h2M8 12.75h2"/></svg>';
 const BOOKMARK = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2.5h8v11l-4-2.8-4 2.8z"/></svg>';
 const PENCIL = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10.8 2.7l2.5 2.5-7.6 7.6-3.2.7.7-3.2z"/><path d="M9.4 4.1l2.5 2.5"/></svg>';
 const FILES = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 1.8h6L12.5 5v9.2h-9z"/><path d="M8 6.5v4M6 8.5h4"/></svg>';
@@ -45,6 +46,7 @@ export function buildSessionHtml(p: HtmlParts): string {
 <div id="hdr" class="compact">${logo}<span class="title" id="title" title="Click to rename">New session</span><button class="icon-btn title-edit" id="titleEdit" title="Rename session">${PENCIL}</button><span class="branch-tag" id="branchTag" hidden></span>
   <button class="agent-btn" id="agentBtn" title="Agents in this session" aria-haspopup="menu"><span class="dot"></span><span id="agentName">Agent 1</span><span class="badge" id="agentCount"></span>${CHEVRON}</button>
   <div id="ctxRing" class="ring" title="Context usage" role="img" aria-label="Context usage"><svg viewBox="0 0 36 36"><circle class="track" cx="18" cy="18" r="15.5"/><circle class="arc" id="ctxArc" cx="18" cy="18" r="15.5"/></svg><span id="ctxPct">0%</span></div>
+  <button class="icon-btn hdr-icon" id="mapBtn" title="Agent map: every agent in this session, live">${MAP}</button>
   <button class="icon-btn hdr-icon changes-btn" id="changesBtn" title="Review the files this session changed">${FILES}<span class="badge" id="changesCount" hidden></span></button>
   <button class="icon-btn hdr-icon" id="sumBtn" title="Summarize this session: a handoff you can paste into a new session">${SUMMARY}</button>
   <button class="icon-btn hdr-icon" id="bmBtn" title="Bookmarked replies">${BOOKMARK}</button>

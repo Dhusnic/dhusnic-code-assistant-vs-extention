@@ -1,0 +1,3 @@
+# macOS installer scripts must keep Unix line endings (CRLF breaks bash on macOS).
+*.sh text eol=lf
+*.command text eol=lf

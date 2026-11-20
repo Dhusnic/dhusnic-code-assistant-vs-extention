@@ -12,6 +12,8 @@ export interface SearchOptions {
   signal?: AbortSignal; limit?: number; perSession?: number; concurrency?: number;
   /** Called as hits are found, in discovery order, at most `limit` times. The returned array is the ranked result. */
   onResult?: (hit: SessionHit) => void;
+  /** Only sessions this accepts are searched (e.g. the current workspace's). */
+  include?: (sessionId: string) => boolean | Promise<boolean>;
 }
 export interface ExportOptions { includeTools?: boolean }
 
@@ -183,7 +185,7 @@ const byRank = (a: SessionHit, b: SessionHit): number =>
  * Each worker holds one file in memory at a time. Rejects with `Cancelled` when `signal` aborts.
  */
 export async function searchSessions(dir: string, query: string, opts: SearchOptions = {}): Promise<SessionHit[]> {
-  const { signal, limit = 50, perSession = 3, concurrency = 4, onResult } = opts;
+  const { signal, limit = 50, perSession = 3, concurrency = 4, onResult, include } = opts;
   const cancelled = (): void => { if (signal?.aborted) { throw new Error('Cancelled'); } };
   cancelled();
   const terms = parseQuery(query);
@@ -198,7 +200,10 @@ export async function searchSessions(dir: string, query: string, opts: SearchOpt
   const worker = async (): Promise<void> => {
     while (next < ids.length) {
       cancelled();
-      const hit = await searchOne(dir, ids[next++], terms, Math.max(0, perSession), now, signal);
+      const sid = ids[next++];
+      if (include && !(await Promise.resolve().then(() => include(sid)).catch(() => false))) { continue; }
+      cancelled();
+      const hit = await searchOne(dir, sid, terms, Math.max(0, perSession), now, signal);
       cancelled();
       if (!hit) { continue; }
       hits.push(hit);

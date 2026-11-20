@@ -7,7 +7,7 @@ import { Answers, MAX_OPTIONS, MAX_QUESTIONS, UserQuestion, formatAnswers, valid
 import { MAX_TODOS, TodoInput, formatTodos, validateTodos } from './todos';
 import { SKILL_TOOL, Skill, expandSkill, findSkill, skillToolSpec } from './skills';
 import { Effort, Mode, effortParams, isAllowed, requiresApproval } from './policy';
-import { BASE_PROMPT, environmentSection } from './prompts';
+import { BASE_PROMPT, FANOUT_PROMPT, environmentSection } from './prompts';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
 import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact } from './compaction';
 import * as path from 'path';
@@ -35,6 +35,8 @@ export interface AgentUi {
   /** Shows the proposed plan; resolves to the mode to continue in, or null if the user wants more planning. */
   approvePlan?(id: string, plan: string): Promise<Mode | null>;
   modeChanged?(mode: Mode): void;
+  /** The agent settled a waiting approval itself (the mode changed so it no longer needs the user): remove the prompt. */
+  approvalSettled?(id: string, label: string): void;
   /** Shows clarifying questions; resolves with the answers, or null if the user skipped them. */
   askUser?(id: string, questions: UserQuestion[]): Promise<Answers | null>;
   /** The agent's task list changed (todo_write). */
@@ -43,6 +45,8 @@ export interface AgentUi {
   userInjected?(items: QueuedInput[]): void;
   /** Live progress lines from a running sub-agent, shown inside its task card. */
   subProgress?(parentId: string, text: string): void;
+  /** Tokens one model call consumed (prompt + completion), for per-agent monitoring. */
+  spent?(tokens: number): void;
   /** End of a turn that changed files: which files, and which checks ran after the last change. */
   verification?(v: { changed: string[]; checks: Array<{ label: string; ok: boolean }> }): void;
 }
@@ -59,6 +63,8 @@ export function queuedMessageText(texts: string[]): string {
 
 export interface ToolRequest { tool: string; kind: ToolKind; args: any; root: string; mode: Mode }
 export interface GuardDecision { effect?: 'allow' | 'ask' | 'deny'; reason?: string }
+/** The rules and the mode together: run, ask first, refused by a rule, or not allowed in this mode. */
+type Verdict = { effect: 'allow' | 'ask' | 'deny' | 'mode'; reason?: string };
 export interface HookOutcome { blocked: boolean; reason?: string; context?: string[] }
 
 /** Optional safety layer around the agent loop: permission rules, hooks, secret masking and auditing. */
@@ -185,6 +191,12 @@ export interface SpawnResult {
 
 export { BASE_PROMPT } from './prompts';
 
+/** Tokens one model call consumed: the gateway's own count, or an estimate when it does not report usage. */
+export function tokensSpent(res: Pick<StreamResult, 'usage' | 'content' | 'toolCalls'>, sent: ChatMessage[]): number {
+  if (res.usage) { return Math.max(0, (res.usage.prompt || 0) + (res.usage.completion || 0)); }
+  return estimateTokens([...sent, { role: 'assistant', content: res.content || null, tool_calls: res.toolCalls?.length ? res.toolCalls : undefined }]);
+}
+
 /** Claude-style delegation tool: launches a sub-agent (foreground or background). */
 export const AGENT_TOOL = 'agent';
 export const TASK_TOOL = AGENT_TOOL;
@@ -198,7 +210,7 @@ ${list}
 
 How to use it:
 - Sub-agents start with an EMPTY context (except "fork"), so put every detail they need in prompt and say exactly what to return.
-- Launch several agents in one turn (multiple tool calls) to run them in parallel.
+- Launch several agents in one turn (multiple tool calls) to run them in parallel. When the user lists several independent tasks, launch one agent per task in the same response; never give two parallel agents edits to the same files.
 - Set run_in_background to true for long work: the call returns at once and you are notified automatically when the agent finishes. Do not poll, sleep or wait for it; continue with other work or end your turn.
 - An agent's final message is its report and is returned only to you; summarize what matters for the user.
 - Use send_message to give an existing agent follow-up instructions; it keeps its context.
@@ -279,7 +291,7 @@ export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memo
   return [
     BASE_PROMPT,
     mode === 'plan' ? PLAN_PROMPT : '',
-    subagent ? SUBAGENT_PROMPT : '',
+    subagent ? SUBAGENT_PROMPT : `\n\n${FANOUT_PROMPT}`,
     extra ? `\n\n${extra}` : '',
     hint ? `\n\nEffort guidance: ${hint}` : '',
     `\n\n${environmentSection(root, { platform: process.platform, ...(roots && roots.length > 1 ? { roots } : {}) })}`,
@@ -300,6 +312,13 @@ export class Agent {
   private approvals = new Serializer();
   /** Supplies (and removes) messages the user queued while this agent was busy. */
   pendingInput?: () => QueuedInput[];
+  /**
+   * The mode the user has selected right now. When set, a running turn follows it from the next tool call on
+   * (instead of the mode the turn started with); call reconsiderApprovals() after it changes.
+   */
+  liveMode?: () => Mode;
+  /** Approvals waiting for the user, by tool call id: each one judges itself again under the current mode. */
+  private waiting = new Map<string, () => Promise<void>>();
   /** Which files this agent has read, so edits are based on their current contents. */
   readonly reads = new FileReadTracker();
   /** Absolute paths changed in this agent's last turn (by any of its tools, commands or sub-agents). */
@@ -315,6 +334,70 @@ export class Agent {
 
   reset(): void { this.cancel(); this.history = []; this.turnStarts = []; this.reads.clear(); }
   cancel(): void { this.abort?.abort(); }
+
+  /**
+   * The user switched modes: every approval still waiting is judged again. One the new mode allows without asking runs
+   * now; one the new mode forbids (plan) is refused; rule, protected-path, policy and web asks keep waiting.
+   */
+  reconsiderApprovals(): void { for (const recheck of [...this.waiting.values()]) { void recheck(); } }
+
+  /** Brings the turn's options up to the user's current mode; returns it. */
+  private syncMode(run: RunOptions): Mode {
+    const live = this.liveMode?.();
+    if (live) { run.mode = live; }
+    return run.mode;
+  }
+
+  /** What the rules and the mode say about a call. Rule denies and asks hold in every mode; only mode-based asks vary. */
+  private async judge(req: ToolRequest): Promise<Verdict> {
+    if (!isAllowed(req.mode, req.kind)) { return { effect: 'mode' }; }
+    const d = (await this.deps.guard?.decide?.(req)) ?? {};
+    if (d.effect === 'deny' || d.effect === 'ask') { return { effect: d.effect, reason: d.reason }; }
+    return { effect: d.effect !== 'allow' && requiresApproval(req.mode, req.kind) ? 'ask' : 'allow' };
+  }
+
+  /**
+   * Asks the user to approve a call, following the live mode: when the mode changes while the call waits (behind
+   * another prompt or for the user), it is judged again and runs, or is refused, without asking if the new mode says so.
+   * Resolves with true to run it, or with the refusal to return to the model. `req.mode` ends as the mode that decided.
+   */
+  private async awaitApproval(req: ToolRequest, ask: ApprovalRequest, opts: RunOptions, ui: AgentUi, signal: AbortSignal): Promise<true | string> {
+    if (signal.aborted) { return 'DENIED by user.'; }
+    const refusal = (v: Verdict, mode: Mode): string => (v.effect === 'mode'
+      ? `ERROR: ${req.tool} is not allowed in ${mode} mode.`
+      : `DENIED by permission rule${v.reason ? `: ${v.reason}` : '.'}`);
+    // It may have waited behind another prompt while the mode changed.
+    if (this.syncMode(opts) !== req.mode) {
+      req.mode = opts.mode;
+      const v = await this.judge(req);
+      if (v.effect === 'allow') { return true; }
+      if (v.effect !== 'ask') { return refusal(v, req.mode); }
+      ask = { ...ask, reason: v.reason };
+    }
+    return new Promise<true | string>((resolve) => {
+      let done = false;
+      const settle = (r: true | string, label?: string): void => {
+        if (done) { return; }
+        done = true;
+        this.waiting.delete(ask.id);
+        if (label) { ui.approvalSettled?.(ask.id, label); }
+        resolve(r);
+      };
+      this.waiting.set(ask.id, async () => {
+        const mode = this.liveMode?.();
+        if (done || signal.aborted || !mode || mode === req.mode) { return; }
+        let v: Verdict;
+        try { v = await this.judge({ ...req, mode }); } catch { return; }
+        // Still waiting, the mode did not change again meanwhile, and the new mode decides without the user.
+        if (done || this.liveMode?.() !== mode || v.effect === 'ask') { return; }
+        req.mode = mode;
+        opts.mode = mode;
+        if (v.effect === 'allow') { settle(true, `allowed (${mode} mode)`); } else { settle(refusal(v, mode), v.effect === 'mode' ? `not allowed in ${mode} mode` : 'denied by permission rule'); }
+      });
+      ui.approve(ask).then((ok) => settle(ok ? true : 'DENIED by user.'), () => settle('DENIED by user.'));
+    });
+  }
+
   get turnCount(): number { return this.turnStarts.length; }
 
   private warnedTextCalls = false;
@@ -346,7 +429,9 @@ export class Agent {
     try {
       const res = await compactHistory(pruned, this.turnStarts, async (text) => {
         const cfg = { ...(await this.deps.getConfig(opts)), temperature: 0.1, maxTokens: 2048 };
-        const out = await this.deps.llm(cfg, [{ role: 'system', content: SUMMARY_SYSTEM }, { role: 'user', content: text }], [], () => {}, signal);
+        const sent: ChatMessage[] = [{ role: 'system', content: SUMMARY_SYSTEM }, { role: 'user', content: text }];
+        const out = await this.deps.llm(cfg, sent, [], () => {}, signal);
+        ui.spent?.(tokensSpent(out, sent));
         return out.content;
       });
       this.history = res.summarized ? res.history : pruneToolOutputs(this.history, 2, 600);
@@ -475,6 +560,8 @@ export class Agent {
       }
       for (let i = 0; i < ep.maxIterations; i++) {
         this.injectQueued(ui);
+        // The user may have switched modes during the last step: the next model call and its tools follow the new one.
+        this.syncMode(run);
         await this.compact(opts, ui, false);
         const cfg = { ...(await this.deps.getConfig(opts)), temperature: ep.temperature, maxTokens: ep.maxTokens };
         const memory = (await this.deps.memory?.()) ?? '';
@@ -497,6 +584,7 @@ export class Agent {
           await this.compact(opts, ui, true);
           continue;
         }
+        ui.spent?.(tokensSpent(res, [system, ...this.history]));
         // A gateway without a tool-call parser returns the calls as text (<tool_call>…): recognize and run them anyway.
         if (!res.toolCalls.length && res.content) {
           const parsed = parseTextToolCalls(res.content, specs.map((sp) => sp.function.name));
@@ -863,6 +951,8 @@ export class Agent {
   protected async execTool(
     id: string, name: string, rawArgs: string, opts: RunOptions, ui: AgentUi, signal: AbortSignal, turn: number,
   ): Promise<string> {
+    // Every call follows the mode the user has selected now, not the one the turn started with (sub-agents inherit it).
+    this.syncMode(opts);
     if (name === PLAN_TOOL) { return this.execPlan(id, rawArgs, opts, ui, signal); }
     if (name === AGENT_TOOL) { return this.execTask(id, rawArgs, opts, ui, signal); }
     if (name === SEND_TOOL) { return this.execSend(id, rawArgs, ui); }
@@ -910,16 +1000,23 @@ export class Agent {
     const started = Date.now();
     try {
       // Deny rules are checked first and cannot be overridden by the mode, a hook or an approval.
-      const decision = (await guard?.decide?.(req)) ?? {};
-      if (decision.effect === 'deny') { return finish(false, `DENIED by permission rule${decision.reason ? `: ${decision.reason}` : '.'}`); }
+      let verdict = await this.judge(req);
+      if (verdict.effect === 'deny') { return finish(false, `DENIED by permission rule${verdict.reason ? `: ${verdict.reason}` : '.'}`); }
       const pre = await guard?.beforeTool?.(req, signal);
       if (pre?.blocked) { return finish(false, `BLOCKED by hook: ${pre.reason ?? 'no reason given'}`); }
-      const ask = decision.effect === 'ask' || (decision.effect !== 'allow' && requiresApproval(opts.mode, tool.kind));
-      if (ask) {
+      // The user may have switched modes while the rules and hooks ran: the call follows the new mode.
+      if (this.syncMode(opts) !== req.mode) {
+        req.mode = opts.mode;
+        verdict = await this.judge(req);
+        if (verdict.effect === 'deny') { return finish(false, `DENIED by permission rule${verdict.reason ? `: ${verdict.reason}` : '.'}`); }
+      }
+      if (verdict.effect === 'mode') { return finish(false, `ERROR: ${name} is not allowed in ${req.mode} mode.`); }
+      if (verdict.effect === 'ask') {
         guard?.onApproval?.(req, 'asked');
-        const ok = await raceAbort(this.approvals.run(async () => (signal.aborted ? false : ui.approve({ id, kind: tool.kind, name, detail, preview, reason: decision.effect === 'ask' ? decision.reason : undefined }))), signal);
-        guard?.onApproval?.(req, ok ? 'allowed' : 'denied');
-        if (!ok) { return finish(false, 'DENIED by user.'); }
+        const ask: ApprovalRequest = { id, kind: tool.kind, name, detail, preview, reason: verdict.reason };
+        const out = await raceAbort(this.approvals.run(() => this.awaitApproval(req, ask, opts, ui, signal)), signal);
+        guard?.onApproval?.(req, out === true ? 'allowed' : 'denied');
+        if (out !== true) { return finish(false, out); }
       }
       const result = await tool.run(args, ctx);
       const post = await guard?.afterTool?.(req, true, result, Date.now() - started, signal);

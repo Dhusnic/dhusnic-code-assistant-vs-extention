@@ -19,6 +19,7 @@ import { Effort, Mode, isEffort, isMode } from '../core/policy';
 import { AgentSettings, AgentSpec, AgentWorktreeRef, SessionManager } from '../core/runtime';
 import { FileIndex, findRipgrep, ripgrepCandidates } from '../core/search';
 import { SessionStore2, StoredSessionSummary } from '../core/store';
+import { ScopeContext, SessionScope, workspaceKey } from '../core/workspaceScope';
 import { UsageTracker } from '../core/usage';
 import { DiffContentProvider } from './diffProvider';
 import { SessionPanel } from './sessionPanel';
@@ -38,6 +39,7 @@ import { createTerminalRunner } from './features/terminalRunner';
 import { WebService } from './features/web';
 
 export const PANEL_TYPE = 'infraonAssistant.session';
+const OTHER_WORKSPACE = 'That session belongs to another workspace. Open it from the VS Code window of that folder.';
 
 export interface SidebarSink { refresh(): void }
 
@@ -54,7 +56,9 @@ export class Hub {
   private mcpErrors: string[] = [];
   private panels = new Map<string, SessionPanel>();
   private refreshTimer?: NodeJS.Timeout;
-  private storedCache?: { at: number; items: StoredSessionSummary[] };
+  private storedCache?: { at: number; items: Array<StoredSessionSummary & { unassigned?: boolean }> };
+  /** Limits every session list and session action to this window's workspace (repo). */
+  readonly scope: SessionScope;
   sidebar?: SidebarSink & { post?(m: unknown): void };
   /** True when running inside the automated UI test harness. */
   readonly e2e: boolean;
@@ -130,6 +134,8 @@ export class Hub {
     ctx.subscriptions.push(agentWatcher);
 
     this.store = new SessionStore2(path.join(ctx.globalStorageUri.fsPath, 'sessions'));
+    this.scope = new SessionScope(this.store, () => this.scopeContext(), path.join(ctx.globalStorageUri.fsPath, 'checkpoints'));
+    ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => { this.storedCache = undefined; this.scheduleRefresh(); }));
     this.usage = new UsageTracker(ctx.globalState.get('usage', {}), (d) => { void ctx.globalState.update('usage', d); });
     this.manager = new SessionManager({
       store: this.store,
@@ -142,11 +148,23 @@ export class Hub {
       describeTool: (n, a) => this.describeTool(n, a),
       prepareWorktree: (sid, aid, type) => this.prepareWorktree(sid, aid, type),
       subagentModel: (selected) => this.routeModel('subagent', selected),
+      workspace: () => this.scopeContext().key,
     });
   }
 
   /** The primary workspace folder (the first); other folders of a multi-root workspace are reached through workspaceRoots. */
   get root(): string { return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(); }
+
+  /** This window's workspace identity: the saved .code-workspace file, else the first folder (= root), else "no folder". */
+  scopeContext(): ScopeContext {
+    const id = (u: vscode.Uri) => (u.scheme === 'file' ? u.fsPath : u.toString());
+    const file = vscode.workspace.workspaceFile;
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => id(f.uri));
+    return {
+      key: workspaceKey({ workspaceFile: file && file.scheme !== 'untitled' ? id(file) : undefined, folders }),
+      roots: folders, ignore: [this.ctx.globalStorageUri.fsPath],
+    };
+  }
   get cfg(): vscode.WorkspaceConfiguration { return vscode.workspace.getConfiguration('infraonAssistant'); }
   get media(): vscode.Uri { return vscode.Uri.joinPath(this.ctx.extensionUri, 'media'); }
 
@@ -514,6 +532,7 @@ export class Hub {
 
   async openSession(sid: string): Promise<void> {
     if (this.panels.has(sid)) { this.panels.get(sid)!.panel.reveal(); return; }
+    if (!(await this.inScope(sid))) { void vscode.window.showErrorMessage(OTHER_WORKSPACE); return; }
     const s = await this.manager.open(sid);
     if (!s) { void vscode.window.showErrorMessage('That session could not be loaded. Try "Check storage" in the Infraon sidebar.'); return; }
     this.openPanel(sid);
@@ -528,8 +547,19 @@ export class Hub {
   }
 
   /** Called by the panel serializer after VS Code restarts. */
+  /**
+   * Whether this window may open or change the session: it is live here, or stored for this workspace. A legacy session
+   * nobody could attribute is claimed by this workspace on the way through, so it stops showing up in other windows.
+   */
+  async inScope(sid: string): Promise<boolean> {
+    if (this.manager.sessions.has(sid)) { return true; }
+    const o = await this.scope.ownership(sid).catch(() => 'other' as const);
+    if (o === 'unassigned') { await this.scope.claim(sid); this.storedCache = undefined; }
+    return o !== 'other';
+  }
+
   async restorePanel(panel: vscode.WebviewPanel, sid: unknown): Promise<void> {
-    const s = typeof sid === 'string' ? await this.manager.open(sid).catch(() => undefined) : undefined;
+    const s = typeof sid === 'string' && await this.inScope(sid) ? await this.manager.open(sid).catch(() => undefined) : undefined;
     if (!s || this.panels.has(s.id)) { panel.dispose(); return; }
     panel.webview.options = { enableScripts: true, localResourceRoots: [this.media] };
     this.panels.set(s.id, new SessionPanel(this, panel, s.id));
@@ -562,9 +592,13 @@ export class Hub {
     }, 200);
   }
 
-  async storedSessions(maxAgeMs = 3000): Promise<StoredSessionSummary[]> {
+  /** Stored sessions of this window's workspace only (plus legacy ones nobody can attribute, flagged `unassigned`). */
+  async storedSessions(maxAgeMs = 3000): Promise<Array<StoredSessionSummary & { unassigned?: boolean }>> {
     if (!this.storedCache || Date.now() - this.storedCache.at > maxAgeMs) {
-      this.storedCache = { at: Date.now(), items: await this.store.list().catch(() => []) };
+      const all = await this.store.list().catch(() => []);
+      const live = all.filter((s) => this.manager.sessions.has(s.id));
+      const scoped = await this.scope.filter(all.filter((s) => !this.manager.sessions.has(s.id))).catch(() => []);
+      this.storedCache = { at: Date.now(), items: [...live, ...scoped].sort((a, b) => b.updatedAt - a.updatedAt) };
     }
     return this.storedCache.items;
   }
@@ -572,9 +606,9 @@ export class Hub {
   async sessionsView() {
     const live = new Map(this.manager.snapshot().map((s) => [s.id, s]));
     const stored = await this.storedSessions();
-    const rows = stored.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, agentCount: s.agents, turns: s.turns, interrupted: s.interrupted, live: live.get(s.id) }));
+    const rows = stored.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, agentCount: s.agents, turns: s.turns, interrupted: s.interrupted, live: live.get(s.id), unassigned: !!s.unassigned && !live.has(s.id) }));
     for (const s of live.values()) {
-      if (!stored.some((x) => x.id === s.id)) { rows.push({ id: s.id, title: s.title, updatedAt: s.updatedAt, agentCount: s.agents.length, turns: 0, interrupted: false, live: s }); }
+      if (!stored.some((x) => x.id === s.id)) { rows.push({ id: s.id, title: s.title, updatedAt: s.updatedAt, agentCount: s.agents.length, turns: 0, interrupted: false, live: s, unassigned: false }); }
     }
     return rows.map((r) => {
       const ls = r.live;
@@ -586,7 +620,7 @@ export class Hub {
       return {
         id: r.id, title: ls?.title || r.title || 'New session', updatedAt: Math.max(r.updatedAt, ls?.updatedAt ?? 0),
         agentCount: ls ? agents.length : r.agentCount, turns: ls ? agents.reduce((n, a) => n + a.turns, 0) : r.turns,
-        status, open: this.panels.has(r.id), agents, tokens: this.usage.session(r.id),
+        status, open: this.panels.has(r.id), agents, tokens: this.usage.session(r.id), unassigned: r.unassigned,
       };
     }).sort((a, b) => b.updatedAt - a.updatedAt);
   }
@@ -617,7 +651,8 @@ export class Hub {
   }
 
   async deleteSession(sid: string): Promise<void> {
-    const title = (await this.sessionsView()).find((s) => s.id === sid)?.title ?? 'this session';
+    if (!(await this.inScope(sid))) { void vscode.window.showErrorMessage(OTHER_WORKSPACE); return; }
+    const title =(await this.sessionsView()).find((s) => s.id === sid)?.title ?? 'this session';
     const ok = await vscode.window.showWarningMessage(`Delete "${title}"? Its agents are stopped and its history is removed.`, { modal: true }, 'Delete');
     if (ok !== 'Delete') { return; }
     this.panels.get(sid)?.panel.dispose();
@@ -629,7 +664,8 @@ export class Hub {
   }
 
   async renameSession(sid: string): Promise<void> {
-    const s = this.manager.sessions.get(sid) ?? await this.manager.open(sid);
+    if (!(await this.inScope(sid))) { void vscode.window.showErrorMessage(OTHER_WORKSPACE); return; }
+    const s =this.manager.sessions.get(sid) ?? await this.manager.open(sid);
     if (!s) { return; }
     const title = await vscode.window.showInputBox({ prompt: 'Session name', value: s.title });
     if (title === undefined) { return; }
@@ -643,7 +679,10 @@ export class Hub {
   async verifyStorage(): Promise<{ selfTest: { ok: boolean; ms: number; detail: string }; items: Awaited<ReturnType<SessionStore2['verify']>> }> {
     await this.manager.shutdown();
     const selfTest = await this.store.selfTest();
-    const items = await this.store.verify(true);
+    const all = await this.store.verify(true);
+    // Every session is checked and repaired, but only this workspace's are reported by title.
+    const items: typeof all = [];
+    for (const it of all) { if ((await this.scope.ownership(it.id).catch(() => 'other')) !== 'other') { items.push(it); } }
     this.storedCache = undefined;
     this.scheduleRefresh();
     return { selfTest, items };

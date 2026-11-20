@@ -127,16 +127,18 @@ export function activate(context: vscode.ExtensionContext): void {
 /**
  * The Windows installer cannot write VS Code's encrypted secret store, so it leaves the key in
  * %USERPROFILE%\.infraon-assistant\setup.json. The first activation moves it into SecretStorage and deletes the file.
+ * A saved key is kept unless the installer was run with -ResetKey (`replace: true`), so a stale file never overwrites it.
  */
 async function importInstallerKey(context: vscode.ExtensionContext): Promise<void> {
   try {
     const fs = require('fs') as typeof import('fs');
     const file = (require('path') as typeof import('path')).join((require('os') as typeof import('os')).homedir(), '.infraon-assistant', 'setup.json');
     if (!fs.existsSync(file)) { return; }
-    const data = JSON.parse(fs.readFileSync(file, 'utf8')) as { apiKey?: string };
-    if (data.apiKey && !(await context.secrets.get(KEY_SECRET))) {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8')) as { apiKey?: string; replace?: boolean };
+    const had = !!(await context.secrets.get(KEY_SECRET));
+    if (data.apiKey?.trim() && (!had || data.replace === true)) {
       await context.secrets.store(KEY_SECRET, data.apiKey.trim());
-      void vscode.window.showInformationMessage('Infraon Assistant is ready: your API key was configured by the installer.');
+      void vscode.window.showInformationMessage(had ? 'Infraon Assistant: your API key was replaced by the installer.' : 'Infraon Assistant is ready: your API key was configured by the installer.');
     }
     fs.rmSync(file, { force: true });
   } catch { /* leave the file; "Set API Key" still works */ }
