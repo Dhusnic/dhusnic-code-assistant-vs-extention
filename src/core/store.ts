@@ -19,7 +19,11 @@ const ROLES = new Set(['system', 'user', 'assistant', 'tool']);
 const ID_RE = /^[\w-]{1,64}$/;
 
 export interface AgentSummary { id: string; name: string; createdAt: number; updatedAt: number; status: StoredStatus; turns: number }
-export interface SessionMeta { v: number; id: string; title: string; createdAt: number; updatedAt: number; agents: AgentSummary[] }
+export interface SessionMeta {
+  v: number; id: string; title: string; createdAt: number; updatedAt: number; agents: AgentSummary[];
+  /** The workspace (repo) the session belongs to, as a workspaceKey(); absent on sessions saved before it was recorded. */
+  workspace?: string;
+}
 export interface AgentRecord {
   v: number; id: string; sessionId: string; name: string; createdAt: number; updatedAt: number;
   status: StoredStatus; model: string; mode: string; effort: string; error?: string;
@@ -31,12 +35,14 @@ export interface AgentRecord {
   bookmarks?: Bookmark[];
   /** The git worktree this sub-agent works in, when agent worktrees are on. */
   worktree?: { path: string; branch: string; base: string };
+  /** Monitoring totals: tokens consumed and wall time spent running, across all runs. */
+  stats?: { tokens: number; runMs: number };
   /** The agent's task list (todo_write) with the actions recorded per step. */
   todos?: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string; actions: Array<{ toolId: string; detail: string; ok?: boolean }> }>;
 }
 export interface Bookmark { turn: number; hash: string; preview: string; at: number }
 export interface LoadedSession { meta: SessionMeta; agents: AgentRecord[]; warnings: string[] }
-export interface StoredSessionSummary { id: string; title: string; createdAt: number; updatedAt: number; agents: number; turns: number; interrupted: boolean }
+export interface StoredSessionSummary { id: string; title: string; createdAt: number; updatedAt: number; agents: number; turns: number; interrupted: boolean; workspace?: string }
 export interface VerifyItem { id: string; title: string; status: 'ok' | 'repaired' | 'corrupt'; issues: string[] }
 
 export const validId = (id: unknown): id is string => typeof id === 'string' && ID_RE.test(id);
@@ -220,9 +226,26 @@ export class SessionStore2 {
         id: meta.id, title: meta.title, createdAt: meta.createdAt, updatedAt: meta.updatedAt,
         agents: meta.agents.length, turns: meta.agents.reduce((s, a) => s + (a.turns ?? 0), 0),
         interrupted: meta.agents.some((a) => LIVE_STATUSES.includes(a.status) || a.status === 'interrupted'),
+        ...(typeof meta.workspace === 'string' ? { workspace: meta.workspace } : {}),
       });
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** The session's recorded workspace; `exists` is false when the session has no readable meta and no agents. */
+  async workspaceOf(sid: string): Promise<{ exists: boolean; workspace?: string }> {
+    const m = await readValidated(this.metaFile(sid), isMeta);
+    if (m.data) { return { exists: true, workspace: typeof m.data.workspace === 'string' ? m.data.workspace : undefined }; }
+    return { exists: (await this.agentIdsOnDisk(sid)).length > 0 };
+  }
+
+  /** Records the workspace of a session saved without one. Never changes a workspace that is already recorded. */
+  async setWorkspace(sid: string, workspace: string): Promise<boolean> {
+    await this.flush();
+    const m = await readValidated(this.metaFile(sid), isMeta);
+    if (!m.data || typeof m.data.workspace === 'string') { return false; }
+    await this.saveMeta({ ...m.data, workspace });
+    return true;
   }
 
   async deleteSession(sid: string): Promise<void> {

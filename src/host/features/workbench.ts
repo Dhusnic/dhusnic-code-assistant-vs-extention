@@ -140,7 +140,7 @@ export async function doCommit(hub: Hub, panel: FeaturePanel, message: string, s
 /** Live full-text search across every saved session. */
 export function searchPicker(hub: Hub, initial = ''): void {
   const qp = vscode.window.createQuickPick<vscode.QuickPickItem & { id: string }>();
-  qp.placeholder = 'Search the text of all saved sessions'; qp.matchOnDescription = true; qp.matchOnDetail = true; qp.value = initial;
+  qp.placeholder = 'Search the text of this workspace\'s saved sessions'; qp.matchOnDescription = true; qp.matchOnDetail = true; qp.value = initial;
   let ctl: AbortController | undefined, timer: NodeJS.Timeout | undefined;
   const run = (q: string) => {
     ctl?.abort(); clearTimeout(timer);
@@ -148,7 +148,9 @@ export function searchPicker(hub: Hub, initial = ''): void {
     timer = setTimeout(() => {
       const c = ctl = new AbortController();
       qp.busy = true;
-      searchSessions(hub.store.dir, q, { signal: c.signal, limit: 30 }).then((hits) => {
+      // Only this window's workspace: other repos' sessions are neither searched nor shown.
+      const include = async (sid: string) => hub.manager.sessions.has(sid) || (await hub.scope.ownership(sid)) !== 'other';
+      searchSessions(hub.store.dir, q, { signal: c.signal, limit: 30, include }).then((hits) => {
         if (c.signal.aborted) { return; }
         qp.items = hits.map((h) => ({ id: h.sessionId, label: h.title || 'Untitled session', alwaysShow: true, description: new Date(h.updatedAt).toLocaleDateString(), detail: h.matches[0]?.snippet }));
         qp.busy = false;

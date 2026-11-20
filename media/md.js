@@ -2,12 +2,27 @@
 (function (root) {
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+  /** Only web and mail links are clickable: javascript:, data:, file: and command: URLs stay plain text. */
+  const SAFE_URL = /^(https?:\/\/|mailto:)/i;
+  const link = (href, text) => `<a href="${href}" class="ext-link" data-href="${href}" title="${href}">${text}</a>`;
+
   function inline(s) {
-    return esc(s)
-      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    // Code spans and links are set aside first, so emphasis markers inside a URL or code are never touched.
+    const keep = [];
+    const hold = (html) => `\u0000${keep.push(html) - 1}\u0000`;
+    const emph = (x) => x
       .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
       .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>')
       .replace(/~~([^~\n]+)~~/g, '<s>$1</s>');
+    let t = esc(s).replace(/\u0000/g, '')
+      .replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`))
+      .replace(/\[([^\]\n]+)\]\(\s*([^\s)]+)(?:\s+&quot;[^&\n]*&quot;)?\s*\)/g, (m, text, href) => (SAFE_URL.test(href) ? hold(link(href, emph(text))) : m))
+      .replace(/&lt;((?:https?:\/\/|mailto:)[^\s&]+)&gt;/gi, (_, href) => hold(link(href, href)))
+      .replace(/(^|[\s(\u0000])((?:https?:\/\/)[^\s<\u0000]*[^\s<\u0000.,;:!?)\]'*_])/g, (_, pre, href) => `${pre}${hold(link(href, href))}`);
+    t = emph(t);
+    // Restored innermost-last: a link's text may itself hold a code span.
+    for (let i = 0; i < 3 && t.includes('\u0000'); i++) { t = t.replace(/\u0000(\d+)\u0000/g, (_, n) => keep[Number(n)] ?? ''); }
+    return t;
   }
 
   /* ---------- tables ---------- */
@@ -90,6 +105,11 @@
     return out.join('');
   }
 
-  const api = { md, inline, esc, cells, isRow, isSep };
+  /** Plain text (status messages, /sources) with its web addresses made clickable; nothing else is interpreted. */
+  function autolink(s) {
+    return esc(s).replace(/(^|[\s(\[])(https?:\/\/[^\s<]*[^\s<.,;:!?)\]'])/g, (_, pre, href) => `${pre}${link(href, href)}`);
+  }
+
+  const api = { md, inline, esc, autolink, cells, isRow, isSep };
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; } else { root.InfraonMd = api; }
 })(typeof window !== 'undefined' ? window : globalThis);

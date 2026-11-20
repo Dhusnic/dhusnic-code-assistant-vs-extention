@@ -12,6 +12,7 @@ import { EFFORT_INFO, MODES, MODE_INFO, Mode, isEffort, isMode } from '../core/p
 import { UiEvent } from '../core/runtime';
 import { COMMANDS, SlashApi, parseSlash, runSlash } from '../core/slash';
 import { SKILL_TEMPLATE, expandSkill, findSkill, validateNewSkill } from '../core/skills';
+import { watchBranch } from './branchWatcher';
 import { DIFF_SCHEME } from './diffProvider';
 import type { Hub } from './hub';
 
@@ -22,10 +23,21 @@ import type { Hub } from './hub';
 /** Slash commands that only show or change settings, so they are fine while the agent works. */
 const SAFE_WHILE_BUSY = new Set(['help', 'mode', 'effort', 'model', 'permissions', 'changes', 'audit', 'history', 'search', 'export', 'skills', 'agents', 'mcp', 'memory', 'schedule']);
 
+/** Opens a link from the chat in the default browser. Only web and mail links: the webview's text is untrusted. */
+export async function openLink(raw: unknown): Promise<boolean> {
+  const url = typeof raw === 'string' ? raw.trim() : '';
+  if (!/^(https?:\/\/|mailto:)/i.test(url) || url.length > 8000) { return false; }
+  try { return await vscode.env.openExternal(vscode.Uri.parse(url, true)); } catch { return false; }
+}
+
 export class SessionPanel {
   focused: string;
   private lastTitle = '';
   private headerTimer?: NodeJS.Timeout;
+  private headerSeq = 0;
+  private lastGitInfo = '';
+  private branchRoot = '';
+  private branchSub?: vscode.Disposable;
 
   constructor(private hub: Hub, readonly panel: vscode.WebviewPanel, readonly sid: string, private prefill?: string, private skillsView?: 'list' | 'new' | 'ai') {
     this.focused = hub.manager.session(sid).main().id;
@@ -35,7 +47,9 @@ export class SessionPanel {
     panel.webview.onDidReceiveMessage((m) => void this.onMessage(m).catch((e) => this.info(`Error: ${e.message ?? e}`, true)));
     const onSkills = () => { this.post({ type: 'state', state: this.uiState() }); this.post({ type: 'skills', items: this.hub.skillViews(), errors: this.hub.skillErrors }); };
     hub.skillListeners.add(onSkills);
-    panel.onDidDispose(() => { clearTimeout(this.headerTimer); hub.skillListeners.delete(onSkills); hub.panelClosed(sid); });
+    this.followBranch();
+    const folders = vscode.workspace.onDidChangeWorkspaceFolders(() => this.followBranch());
+    panel.onDidDispose(() => { clearTimeout(this.headerTimer); this.branchSub?.dispose(); folders.dispose(); hub.skillListeners.delete(onSkills); hub.panelClosed(sid); });
     this.refreshTitle();
   }
 
@@ -65,11 +79,27 @@ export class SessionPanel {
   }
 
   /** Branch name and pending-review count; the git and review code loads shortly after the tab opens. */
-  private refreshHeader(): void {
+  private refreshHeader(delay = 700): void {
     clearTimeout(this.headerTimer);
     this.headerTimer = setTimeout(() => {
-      void import('./features/workbench').then((w) => w.headerInfo(this.hub, this.sid)).then((h) => this.post({ type: 'gitInfo', ...h })).catch(() => undefined);
-    }, 700);
+      const seq = ++this.headerSeq;
+      void import('./features/workbench').then((w) => w.headerInfo(this.hub, this.sid)).then((h) => {
+        const key = JSON.stringify([h.branch, h.changes]);
+        if (seq !== this.headerSeq || key === this.lastGitInfo) { return; } // a newer refresh is on its way, or nothing changed
+        this.lastGitInfo = key;
+        this.post({ type: 'gitInfo', ...h });
+      }).catch(() => undefined);
+    }, delay);
+  }
+
+  /** Live branch name: re-reads the header whenever HEAD of the workspace's repository (hub.root) moves. */
+  private followBranch(): void {
+    const root = this.hub.root;
+    if (root === this.branchRoot && this.branchSub) { return; }
+    this.branchSub?.dispose();
+    this.branchRoot = root;
+    this.branchSub = watchBranch(root, () => this.refreshHeader(50));
+    if (this.lastGitInfo) { this.refreshHeader(50); }
   }
 
   private featurePanel() {
@@ -128,6 +158,7 @@ export class SessionPanel {
         if (this.prefill) { this.post({ type: 'prefill', text: this.prefill }); this.prefill = undefined; }
         if (this.skillsView) { this.showSkills(this.skillsView); this.skillsView = undefined; }
         void this.hub.ensureMcp();
+        this.lastGitInfo = ''; // a (re)loaded view has no header yet
         this.refreshHeader();
         if (!this.hub.models.length) { void this.hub.checkHealth().then(() => this.post({ type: 'state', state: this.uiState() })); }
         break;
@@ -164,6 +195,7 @@ export class SessionPanel {
       }
       case 'rewind': await mgr.rewind(this.sid, this.focused, Number(m.turn)); break;
       case 'openDiff': await this.openDiff(String(m.id)); break;
+      case 'openLink': await openLink(m.url); break;
       case 'queryFiles': this.post({ type: 'files', req: m.req, items: await this.hub.files(String(m.q ?? '')) }); break;
       case 'newSession': await this.hub.newSession(); break;
       case 'openSidebar': await vscode.commands.executeCommand('infraonAssistant.sessions.focus'); break;

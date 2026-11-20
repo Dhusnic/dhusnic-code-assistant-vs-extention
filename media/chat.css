@@ -24,6 +24,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .msg.user .restore { position: absolute; top: 4px; right: 4px; display: none; font-size: 11px; }
 .msg.user:hover .restore { display: block; }
 .msg.assistant p { margin: 6px 0; }
+a.ext-link { color: var(--vscode-textLink-foreground); text-decoration: none; cursor: pointer; word-break: break-word; }
+a.ext-link:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
 .msg.assistant h1, .msg.assistant h2, .msg.assistant h3 { margin: 12px 0 6px; font-size: 1.05em; }
 .msg.assistant ul, .msg.assistant ol { margin: 6px 0; padding-left: 22px; }
 .msg.assistant blockquote { margin: 6px 0; padding: 2px 10px; border-left: 3px solid var(--vscode-focusBorder); opacity: .85; }
@@ -435,9 +437,11 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
 /* ---------- @file and /command picker: same width as the composer, one line per entry ---------- */
 .menu.wide { max-width: none; overflow-x: hidden; }
 .menu.wide .item { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 14px; min-width: 0; }
-.menu.wide .item .row { flex: 0 1 auto; max-width: 45%; min-width: 0; }
-.menu.wide .item .row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.menu.wide .item .d { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+/* The command/skill name (and its args hint) is never cut or wrapped; the description takes what is left and ellipsizes
+   (full text in the tooltip), shrinking to nothing in a narrow panel. */
+.menu.wide .item .row { flex: none; white-space: nowrap; }
+.menu.wide .item .row span { white-space: nowrap; font-weight: 600; }
+.menu.wide .item .d { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--vscode-descriptionForeground, inherit); }
 
 /* ---------- skills manager ---------- */
 .mcard.skills { width: min(820px, 100%); max-height: 86vh; overflow-y: auto; }
@@ -613,3 +617,38 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
 
 /* why an approval is needed, when it is not just the permission mode */
 .approve .ap-why { font-size: 12px; margin: 2px 0 6px; color: var(--vscode-descriptionForeground); }
+
+/* ---------- agent map ---------- */
+.mcard.amap { width: min(860px, 100%); max-height: 86vh; overflow: hidden; }
+.am-sum { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.am-bar { height: 4px; border-radius: 2px; background: var(--vscode-panel-border); overflow: hidden; }
+.am-bar > div { height: 100%; width: 0; background: var(--vscode-charts-green, #3fb950); transition: width .3s ease; }
+.am-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 28px; align-items: center; min-height: 0; }
+.am-root { position: relative; }
+.am-kids { max-height: 62vh; overflow-y: auto; padding: 2px 4px 2px 18px; display: flex; flex-direction: column; gap: 10px; }
+.am-kids.empty { padding-left: 0; }
+.am-kid { position: relative; }
+/* tree connectors: a spine on the left of the children and a branch into each card */
+.am-kid::before { content: ''; position: absolute; left: -18px; top: -6px; bottom: -6px; border-left: 1px solid var(--vscode-panel-border); }
+.am-kid:first-child::before { top: 50%; }
+.am-kid:last-child::before { bottom: 50%; }
+.am-kid:only-child::before { display: none; }
+.am-kid::after { content: ''; position: absolute; left: -18px; top: 50%; width: 18px; border-top: 1px solid var(--vscode-panel-border); }
+.am-body:has(.am-kid) .am-root::after { content: ''; position: absolute; right: -28px; top: 50%; width: 28px; border-top: 1px solid var(--vscode-panel-border); }
+.am-node { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px 10px; cursor: pointer; background: var(--vscode-editor-background); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.am-node:hover, .am-node:focus-visible { border-color: var(--vscode-focusBorder); outline: none; }
+.am-node.active { border-color: var(--vscode-focusBorder); box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
+.am-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.am-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-meta, .am-line { font-size: 11.5px; color: var(--vscode-descriptionForeground); padding-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-line { opacity: .85; }
+.am-stop { flex: none; font-size: 10px; }
+.am-node.st-done .dot { background: var(--vscode-charts-green, #3fb950); }
+.am-node.st-stopped .dot { background: var(--vscode-disabledForeground, #888); }
+.am-node.st-error .am-line { color: var(--vscode-errorForeground); }
+.am-node.st-waiting .am-line { color: var(--vscode-editorWarning-foreground, #cca700); }
+@media (max-width: 560px) {
+  .am-body { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .am-body .am-root::after { display: none; }
+  .am-kids { max-height: 56vh; }
+}

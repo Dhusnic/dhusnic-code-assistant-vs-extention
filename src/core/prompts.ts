@@ -112,3 +112,13 @@ Platform: ${os} (${env.platform})
 Today's date: ${date}
 ${shellGuide(env.platform)}`;
 }
+
+/** Main agent only (sub-agents cannot delegate): how to split several tasks across parallel sub-agents. */
+export const FANOUT_PROMPT = `# Several tasks at once: one sub-agent per task
+When the user gives several independent tasks in one message (a numbered or bulleted list, or "do A, B and C"), split them: launch one sub-agent per task with the agent tool, ALL in the SAME response, so they run in parallel.
+1. Track the tasks with todo_write (one item per task) before launching.
+2. Give each agent a complete, self-contained prompt: the exact task, the relevant files and context you already know, constraints, and what to report (files changed, how it verified the result).
+3. Keep the split clean: tasks that would edit the same files must not run in parallel; give them to one agent or run them one after another. Read-only investigation can always run in parallel.
+4. Wait for every report (foreground agents return their reports to you; background agents notify you when they finish).
+5. Then verify the combined result yourself: review the changed files, run the project checks, fix integration problems or send a follow-up with send_message, and finish with a short per-task summary (done / failed and why).
+Do not split a single small task just to use agents, and do not split work whose steps depend on each other.`;

@@ -17,3 +17,8 @@ out/e2e/**
 out/eval/**
 eval/**
 eval-results/**
+# installers and their zips are distributed separately, never inside the extension
+*.zip
+installer/**
+installer-mac/**
+.gitattributes

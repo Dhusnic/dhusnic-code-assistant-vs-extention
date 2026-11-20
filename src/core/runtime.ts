@@ -31,6 +31,10 @@ export interface AgentView {
   outcome?: 'completed' | 'failed' | 'cancelled'; resultPreview?: string;
   /** The user stopped this agent's latest run. */
   cancelled?: boolean;
+  /** Tokens this agent has consumed across all its runs (prompt + completion). */
+  tokens: number;
+  /** Time spent in finished runs; add now - startedAt while one is running. */
+  runMs: number;
 }
 export type AgentRole = 'main' | 'sub';
 /** What kind of Agent the host should build: the main conversation, or a sub-agent of a given type. */
@@ -71,6 +75,10 @@ export class AgentRuntime {
   bookmarks: Bookmark[] = [];
   todos: TodoItem[] = [];
   worktree?: AgentWorktreeRef;
+  /** Tokens consumed across all runs (prompt + completion), for monitoring. */
+  tokens = 0;
+  /** Wall time of finished runs. */
+  runMs = 0;
 
   constructor(
     readonly sessionId: string, readonly id: string, public name: string,
@@ -78,6 +86,8 @@ export class AgentRuntime {
     readonly createdAt = Date.now(), public updatedAt = Date.now(),
   ) {
     agent.pendingInput = () => this.userQueue.splice(0).map((q) => ({ text: q.prompt, display: q.display, files: q.files, thumbs: q.thumbs }));
+    // A running turn follows the mode the user selects now, not a copy taken when the turn started.
+    agent.liveMode = () => this.settings.mode;
   }
 
   get busy(): boolean { return BUSY.includes(this.status); }
@@ -90,6 +100,7 @@ export class AgentRuntime {
       role: this.role, parentId: this.parentId, type: this.type, description: this.description, background: this.background,
       outcome: this.outcome, result: this.result, parentToolId: this.parentToolId, bookmarks: [...this.bookmarks],
       todos: JSON.parse(JSON.stringify(this.todos)), worktree: this.worktree,
+      stats: { tokens: this.tokens, runMs: this.runMs },
     };
   }
 
@@ -100,6 +111,7 @@ export class AgentRuntime {
       contextUsed: this.usage.used, contextLimit: this.usage.limit, error: this.error, subtasks: [...this.subtasks.values()],
       role: this.role, parentId: this.parentId, type: this.type, description: this.description, background: this.background,
       outcome: this.outcome, resultPreview: this.result?.slice(0, 240), cancelled: this.cancelled,
+      tokens: this.tokens, runMs: this.runMs,
     };
   }
 }
@@ -109,13 +121,18 @@ export class SessionRuntime {
   persisted = false;
   /** Agent ids handed out while their worktree is being prepared. */
   private reserved = new Set<string>();
+  /** The workspace (repo) this session belongs to; saved in its meta so other windows do not list it. */
+  workspace?: string;
   constructor(readonly id: string, public title: string, readonly createdAt = Date.now(), public updatedAt = Date.now()) {}
 
   reserveAgentId(): string { const id = this.nextAgentId(); this.reserved.add(id); return id; }
   releaseAgentId(id: string): void { this.reserved.delete(id); }
 
   meta(): SessionMeta {
-    return { v: SCHEMA_VERSION, id: this.id, title: this.title, createdAt: this.createdAt, updatedAt: this.updatedAt, agents: [...this.agents.values()].map((a) => summaryOf(a.record())) };
+    return {
+      v: SCHEMA_VERSION, id: this.id, title: this.title, createdAt: this.createdAt, updatedAt: this.updatedAt, agents: [...this.agents.values()].map((a) => summaryOf(a.record())),
+      ...(this.workspace !== undefined ? { workspace: this.workspace } : {}),
+    };
   }
   /** The session's main conversation (Claude-style: exactly one per session). */
   main(): AgentRuntime {
@@ -147,6 +164,8 @@ export interface ManagerDeps {
   /** The model sub-agents use when their type does not name one. */
   subagentModel?(selected: string): string;
   newSessionId?(): string;
+  /** The current window's workspace key (see workspaceKey); recorded on every session this manager creates or opens. */
+  workspace?(): string;
   saveThrottleMs?: number;
 }
 
@@ -166,6 +185,7 @@ export class SessionManager {
 
   newSession(settings?: Partial<AgentSettings>): SessionRuntime {
     const s = new SessionRuntime((this.deps.newSessionId ?? newSessionId)(), '');
+    s.workspace = this.deps.workspace?.();
     this.sessions.set(s.id, s);
     this.addAgentTo(s, settings);
     this.changed();
@@ -222,6 +242,8 @@ export class SessionManager {
     const loaded = await this.deps.store.loadSession(sid);
     if (!loaded) { return undefined; }
     const s = new SessionRuntime(sid, loaded.meta.title, loaded.meta.createdAt, loaded.meta.updatedAt);
+    // A legacy session (no workspace recorded) is claimed by the window that opens it; a recorded one keeps its own.
+    s.workspace = loaded.meta.workspace ?? this.deps.workspace?.();
     s.persisted = true;
     const types = this.types();
     loaded.agents.forEach((rec, i) => { if (!rec.role) { rec.role = i === 0 ? 'main' : 'sub'; } });
@@ -234,6 +256,8 @@ export class SessionManager {
       rt.status = rec.status === 'interrupted' || rec.status === 'error' ? rec.status : 'idle';
       rt.role = rec.role ?? 'main';
       rt.worktree = rec.worktree;
+      rt.tokens = finiteOr0(rec.stats?.tokens);
+      rt.runMs = finiteOr0(rec.stats?.runMs);
       rt.todos = Array.isArray(rec.todos) ? rec.todos.map((t) => ({ ...t, actions: Array.isArray(t.actions) ? t.actions : [] })) : [];
       rt.bookmarks = Array.isArray(rec.bookmarks) ? rec.bookmarks.filter((b) => b && Number.isInteger(b.turn) && typeof b.hash === 'string') : [];
       if (rt.role === 'sub') {
@@ -301,8 +325,25 @@ export class SessionManager {
 
   setSettings(sid: string, aid: string, patch: Partial<AgentSettings>): void {
     const rt = this.agent(sid, aid);
+    const before = rt.settings.mode;
     rt.settings = { ...rt.settings, ...patch };
+    if (rt.settings.mode !== before) { this.modeSwitched(rt); }
     this.changed();
+  }
+
+  /**
+   * A mode change takes effect at once: the running turn's next tool calls use it, approvals already waiting are judged
+   * again under it, and the main conversation's sub-agents follow it the same way.
+   */
+  private modeSwitched(rt: AgentRuntime): void {
+    rt.agent.reconsiderApprovals();
+    if (rt.role !== 'main') { return; }
+    for (const sub of this.sessions.get(rt.sessionId)?.agents.values() ?? []) {
+      if (sub.role !== 'sub' || sub.parentId !== rt.id || sub.settings.mode === rt.settings.mode) { continue; }
+      sub.settings = { ...sub.settings, mode: rt.settings.mode };
+      this.emit(sub, { type: 'agentSettings', settings: { ...sub.settings } });
+      sub.agent.reconsiderApprovals();
+    }
   }
 
   /* ------------------------------------------------------------ running */
@@ -380,6 +421,7 @@ export class SessionManager {
       for (const [id, p] of rt.pending) { p.resolve(p.kind === 'approve' ? false : null); this.emit(rt, { type: 'approvalDone', id, label: 'cancelled' }); }
       rt.pending.clear();
       for (const t of rt.subtasks.values()) { if (!t.done) { t.done = true; t.ok = false; } }
+      if (rt.startedAt) { rt.runMs += Date.now() - rt.startedAt; }
       rt.startedAt = undefined;
       this.emit(rt, { type: 'end' });
       await this.persist(rt);
@@ -427,6 +469,7 @@ export class SessionManager {
     const p = rt.pending.get(id);
     if (!p || p.kind === 'question') { return false; }
     rt.pending.delete(id);
+    const switched = !!setMode && setMode !== rt.settings.mode;
     if (setMode) { rt.settings.mode = setMode; this.emit(rt, { type: 'agentSettings', settings: { ...rt.settings } }); }
     const label = p.kind === 'approve'
       ? (value ? `allowed${setMode ? ` (${setMode} on)` : ''}` : 'denied')
@@ -434,6 +477,8 @@ export class SessionManager {
     this.emit(rt, { type: 'approvalDone', id, label });
     if (!rt.pending.size) { this.setStatus(rt, 'running', 'Thinking…'); }
     p.resolve(value);
+    // "Allow and switch mode": other waiting approvals (and sub-agents) follow the new mode too.
+    if (switched) { this.modeSwitched(rt); }
     return true;
   }
 
@@ -670,12 +715,23 @@ export class SessionManager {
         this.emitQueue(rt);
         this.setStatus(rt, rt.status, 'Reading your new message…');
       },
+      spent: (tokens) => {
+        if (!Number.isFinite(tokens) || tokens <= 0) { return; }
+        rt.tokens += Math.round(tokens);
+        this.changed();
+        this.saveSoon(rt);
+      },
       usage: (used, limit) => {
         const total = used + overheadOf(rt);
         rt.usage = { used: total, limit };
         this.emit(rt, { type: 'usage', used: total, limit });
       },
       modeChanged: (mode) => { rt.settings.mode = mode; this.emit(rt, { type: 'agentSettings', settings: { ...rt.settings } }); },
+      approvalSettled: (id, label) => {
+        if (!rt.pending.delete(id)) { return; }
+        this.emit(rt, { type: 'approvalDone', id, label });
+        if (!rt.pending.size) { this.setStatus(rt, 'running', 'Thinking…'); }
+      },
       subProgress: (id, text) => {
         const t = rt.subtasks.get(id);
         if (t) { t.last = text; }
@@ -792,6 +848,8 @@ function forkableHistory(history: ChatMessage[], parentToolId?: string): ChatMes
   }
   return JSON.parse(JSON.stringify(history.slice(0, end)));
 }
+
+const finiteOr0 = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0);
 
 /** Tokens of the system prompt, memory and tool definitions measured on the agent's last request. */
 function overheadOf(rt: AgentRuntime): number {

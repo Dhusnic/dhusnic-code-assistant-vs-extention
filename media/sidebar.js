@@ -88,7 +88,7 @@
         <div class="shead">
           <button class="caret${open ? ' open' : ''}" data-toggle="${esc(s.id)}" title="Show agents">▸</button>
           <span class="dot" title="${STATUS[s.status] || s.status}"></span>
-          <span class="stitle" title="${esc(s.title)}">${esc(s.title)}</span>
+          <span class="stitle" title="${esc(s.title)}${s.unassigned ? ' (older session saved before sessions were kept per workspace; opening it here assigns it to this workspace)' : ''}">${s.unassigned ? '<span class="muted">◌ </span>' : ''}${esc(s.title)}</span>
           <span class="meta">${s.agentCount > 1 ? `${s.agentCount} agents · ` : ''}${ago(s.updatedAt)}${tok}</span>
           <span class="acts">
             ${s.status === 'running' || s.status === 'waiting' ? `<button class="icon-btn" data-stopall="${esc(s.id)}" title="Stop all agents">■</button>` : ''}

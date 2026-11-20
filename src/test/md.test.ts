@@ -70,3 +70,44 @@ test('tables: a horizontal rule under a line that happens to contain pipes is no
   assert.doesNotMatch(out, /<table>/);
   assert.match(out, /<hr>/);
 });
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { inline: mdInline, autolink } = require(path.join(__dirname, '..', '..', 'media', 'md.js'));
+
+test('links: the sources line from the bug report renders as two clickable links', () => {
+  const out = md('**Source**: [MDN - Using the Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch) and [MDN - AbortController](https://developer.mozilla.org/en-US/docs/Web/API/AbortController)');
+  assert.match(out, /<b>Source<\/b>/);
+  assert.match(out, /<a href="https:\/\/developer\.mozilla\.org\/en-US\/docs\/Web\/API\/Fetch_API\/Using_Fetch" class="ext-link" data-href="[^"]+" title="[^"]+">MDN - Using the Fetch API<\/a>/);
+  assert.match(out, />MDN - AbortController<\/a>/);
+  assert.doesNotMatch(out, /\]\(/, 'no raw markdown link syntax left');
+});
+
+test('links: bare URLs, <autolinks>, query strings and trailing punctuation', () => {
+  const out = mdInline('See https://example.com/a_b?x=1&y=2. Or <https://example.org/z> (https://example.net/p).');
+  assert.match(out, /<a href="https:\/\/example\.com\/a_b\?x=1&amp;y=2"[^>]*>https:\/\/example\.com\/a_b\?x=1&amp;y=2<\/a>\./);
+  assert.match(out, />https:\/\/example\.org\/z<\/a>/);
+  assert.match(out, /\(<a href="https:\/\/example\.net\/p"[^>]*>https:\/\/example\.net\/p<\/a>\)/);
+  assert.doesNotMatch(out, /&lt;https/);
+});
+
+test('links: emphasis inside a URL is untouched, link text keeps formatting and code', () => {
+  const out = mdInline('[**bold** `code`](https://x.example/a*b*c~~d~~) and https://y.example/__init__*x*');
+  assert.match(out, /href="https:\/\/x\.example\/a\*b\*c~~d~~"/);
+  assert.match(out, /><b>bold<\/b> <code>code<\/code><\/a>/);
+  assert.match(out, /href="https:\/\/y\.example\/__init__\*x"/);
+});
+
+test('links: unsafe schemes stay text, code spans are not linkified, attributes cannot be broken out of', () => {
+  const out = mdInline('[click](javascript:alert(1)) [f](file:///etc/passwd) `https://in.code/x` [q](https://a.example/"onmouseover="x)');
+  assert.doesNotMatch(out, /href="javascript/);
+  assert.doesNotMatch(out, /href="file/);
+  assert.match(out, /<code>https:\/\/in\.code\/x<\/code>/);
+  assert.doesNotMatch(out, /"onmouseover="/);
+  assert.match(mdInline('[mail me](mailto:a@b.example)'), /href="mailto:a@b\.example"/);
+});
+
+test('links: plain-text info messages get clickable URLs and nothing else', () => {
+  const out = autolink('[1] Fetch API — https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API · official docs\n<b>not bold</b>');
+  assert.match(out, /\[1\] Fetch API — <a href="https:\/\/developer\.mozilla\.org\/en-US\/docs\/Web\/API\/Fetch_API"/);
+  assert.match(out, /&lt;b&gt;not bold&lt;\/b&gt;/);
+});

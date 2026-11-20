@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
   const log = $('log'), input = $('in'), composer = $('composer');
-  const { md, esc } = window.InfraonMd;
+  const { md, esc, autolink } = window.InfraonMd;
   const state = { mode: 'ask', effort: 'medium', model: '', models: [], modeInfo: {}, effortInfo: {}, commands: [], sessionId: '', agentId: '', mainId: '', viewingSub: false, focusedAgent: {}, agentTypes: [], contextLimit: 0 };
   let logo = '', agents = [], busy = false, cur = null, curText = '', curTurn = -1, images = [], bookmarks = new Set(), replaying = false;
   const BUSY = ['queued', 'running', 'waiting'];
@@ -17,23 +17,54 @@
   jumpBtn.id = 'jumpLatest'; jumpBtn.className = 'jump-latest'; jumpBtn.hidden = true;
   jumpBtn.title = 'Scroll to the latest output'; jumpBtn.textContent = '↓ Jump to latest';
   composer.prepend(jumpBtn);
-  const nearBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 48;
+  const gap = () => log.scrollHeight - log.scrollTop - log.clientHeight;
+  const nearBottom = () => gap() < 48;
   // Direction-aware: any move up unpins at once; only reaching the bottom pins again. (Growing content never changes
-  // scrollTop, so it cannot re-pin by itself.)
+  // scrollTop, so it cannot re-pin by itself.) A drop in scrollTop that still sits at the very bottom is the browser
+  // clamping after content shrank (a tool block collapsing, the task card re-rendering), not the user: it never unpins.
   let lastTop = 0;
+  const movedUp = (top) => top < lastTop - 2 && gap() > 2;
   log.addEventListener('scroll', () => {
     const top = log.scrollTop;
-    if (top < lastTop - 2) { pinned = false; } else if (nearBottom()) { pinned = true; jumpBtn.hidden = true; }
+    if (movedUp(top)) { pinned = false; } else if (nearBottom()) { pinned = true; jumpBtn.hidden = true; }
     lastTop = top;
   }, { passive: true });
   // A wheel/touch/key scroll up unpins immediately, even before the scroll event lands between two streamed tokens.
-  log.addEventListener('wheel', (e) => { if (e.deltaY < 0) { pinned = false; } }, { passive: true });
+  // Not when the log cannot move up (top, or nothing to scroll) or a nested scroller (code block, diff) takes the wheel:
+  // that would leave it unpinned at the bottom with no scroll event to ever re-pin it.
+  const innerTakesWheel = (el) => {
+    for (; el && el !== log; el = el.parentElement) { if (el.scrollTop > 0 && el.scrollHeight > el.clientHeight && /auto|scroll/.test(getComputedStyle(el).overflowY)) { return true; } }
+    return false;
+  };
+  log.addEventListener('wheel', (e) => { if (e.deltaY < 0 && log.scrollTop > 0 && !innerTakesWheel(e.target)) { pinned = false; } }, { passive: true });
   log.addEventListener('touchmove', () => { pinned = nearBottom(); }, { passive: true });
-  /** force: the user just sent a message or opened the session, so always show the bottom. */
+  document.addEventListener('keydown', (e) => {
+    if (!['PageUp', 'ArrowUp', 'Home'].includes(e.key) || log.scrollTop <= 0) { return; }
+    const t = e.target;
+    if (t === document.body || t === log || (log.contains(t) && !/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.isContentEditable)) { pinned = false; }
+  });
+  /** force: the user just sent a message, or a session was opened / switched / replayed, so always show the bottom.
+   *  Otherwise follow only while pinned; first catch a user scroll-up (e.g. a scrollbar drag) whose scroll event has not
+   *  landed yet, so a streamed token can never pull the view back down. */
   const scroll = (force) => {
-    if (force === true || pinned) { log.scrollTo({ top: log.scrollHeight, behavior: 'instant' }); lastTop = log.scrollTop; pinned = true; jumpBtn.hidden = true; } else { jumpBtn.hidden = false; }
+    if (force === true) { pinned = true; } else if (movedUp(log.scrollTop)) { pinned = false; lastTop = log.scrollTop; }
+    else if (!pinned && log.clientHeight > 0 && log.scrollHeight <= log.clientHeight + 2) { pinned = true; }   // nothing above to read
+    if (pinned) { log.scrollTo({ top: log.scrollHeight, behavior: 'instant' }); lastTop = log.scrollTop; jumpBtn.hidden = true; } else { jumpBtn.hidden = false; }
   };
   jumpBtn.onclick = () => { pinned = true; jumpBtn.hidden = true; log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' }); };
+  // Late growth nobody calls scroll() for (images loading, mermaid diagrams, tool results, blocks expanding, the panel or
+  // composer resizing) keeps the view at the bottom while pinned; it never scrolls once the user has scrolled up.
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(() => { if (pinned && log.clientHeight > 0) { scroll(); } });
+    ro.observe(log);
+    for (const c of log.children) { ro.observe(c); }
+    new MutationObserver((muts) => {
+      for (const mu of muts) {
+        mu.addedNodes.forEach((n) => { if (n.nodeType === 1) { ro.observe(n); } });
+        mu.removedNodes.forEach((n) => { if (n.nodeType === 1) { ro.unobserve(n); } });
+      }
+    }).observe(log, { childList: true });
+  }
   const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n)}`);
   const since = (ts) => { if (!ts) { return ''; } const s = Math.round((Date.now() - ts) / 1000); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; };
   const hash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) { h = ((h << 5) + h + s.charCodeAt(i)) | 0; } return (h >>> 0).toString(16); };
@@ -219,8 +250,7 @@
       return;
     }
     const d = add('user', esc(m.text));
-    d.dataset.raw = m.text;
-    if (!replaying) { scroll(true); }
+    d.dataset.raw = m.text;   // no force here: send() already jumped; a queued message starting later must not yank a reader
     if (m.thumbs && m.thumbs.length) { d.insertAdjacentHTML('beforeend', `<div class="thumbs">${m.thumbs.map((t) => `<img src="${esc(t)}" alt="screenshot">`).join('')}</div>`); }
     if (m.files && m.files.length) { d.insertAdjacentHTML('beforeend', `<div class="att">${m.files.map((f) => `<span>${f.startsWith('🖼') ? '' : '📎 '}${esc(f)}</span>`).join('')}</div>`); }
     if (m.turn !== undefined) {
@@ -442,7 +472,7 @@
     add('info', esc(m.note || `Rewound to before this message. ${m.files} file${m.files === 1 ? '' : 's'} restored.`));
     cur = null; input.focus();
   }
-  function info(m) { const d = add(m.error ? 'info error' : 'info', esc(m.text)); if (m.agentId) { d.insertAdjacentHTML('beforeend', ` ${viewBtn(m.agentId)}`); } cur = null; }
+  function info(m) { const d = add(m.error ? 'info error' : 'info', autolink(m.text)); if (m.agentId) { d.insertAdjacentHTML('beforeend', ` ${viewBtn(m.agentId)}`); } cur = null; }
 
   /** Applies one transcript event; used for live events and for replays alike. */
   function apply(m) {
@@ -468,6 +498,8 @@
   }
 
   log.addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-href]');
+    if (a) { e.preventDefault(); post({ type: 'openLink', url: a.dataset.href }); return; }
     const t = e.target.closest('button');
     if (!t) { return; }
     if (t.dataset.view) { e.preventDefault(); post({ type: 'viewAgent', id: t.dataset.view }); return; }
@@ -511,6 +543,7 @@
     renderSubBanner(me);
     if (me) { setBusy(BUSY.includes(me.status)); }
     if (openMenu && openMenu.classList.contains('agent-menu')) { agentMenu(true); }
+    if ($('agentMap')) { renderAgentMap(); }
   }
   setInterval(() => { if (agents.some((a) => a.startedAt)) { renderAgents(); } }, 1000);
 
@@ -554,6 +587,10 @@
     if (!subs.length) { m.insertAdjacentHTML('beforeend', '<div class="mempty">None yet. The main agent starts them when a task benefits from delegation, or start one yourself.</div>'); }
     subs.forEach((a) => row(a, false));
     m.insertAdjacentHTML('beforeend', '<div class="sep"></div>');
+    const mapItem = document.createElement('div'); mapItem.className = 'item';
+    mapItem.innerHTML = '<div class="row"><span>Agent map</span></div><span class="d">Every agent with its status, time and tokens, live</span>';
+    mapItem.onmousedown = (ev) => { ev.preventDefault(); closeMenu(); openAgentMap(); };
+    m.appendChild(mapItem);
     const run = document.createElement('div'); run.className = 'item';
     run.innerHTML = '<div class="row"><span>＋ Run an agent…</span></div><span class="d">Start a sub-agent in the background; its report comes back to Main</span>';
     run.onmousedown = (ev) => { ev.preventDefault(); closeMenu(); openLauncher(); };
@@ -561,6 +598,88 @@
     placeBelow(m, $('agentBtn'));
   }
   $('agentBtn').onclick = () => { if (openMenu?.classList.contains('agent-menu')) { closeMenu(); } else { agentMenu(); } };
+
+  /* ---------- agent map: the main conversation and its sub-agents, with live status, time and tokens ---------- */
+  const fmtTokens = (n) => { n = Math.max(0, Math.round(n || 0)); return n < 1000 ? `${n}` : n < 1e6 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1e6).toFixed(2)}M`; };
+  const fmtDur = (ms) => {
+    const s = Math.max(0, Math.floor((ms || 0) / 1000));
+    if (s < 60) { return `${s}s`; }
+    const m = Math.floor(s / 60);
+    return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+  };
+  /** Total running time: finished runs plus the run in progress. */
+  const elapsedOf = (a) => (a.runMs || 0) + (a.startedAt ? Math.max(0, Date.now() - a.startedAt) : 0);
+  const mapStatus = (a) => (BUSY.includes(a.status) ? STATUS_LABEL[a.status] : (OUTCOME_LABEL[a.outcome] || STATUS_LABEL[a.status] || a.status));
+  /** The dot colour: a finished sub-agent shows its outcome, everything else its live status. */
+  const mapState = (a) => (BUSY.includes(a.status) ? a.status : a.outcome === 'completed' ? 'done' : a.outcome === 'failed' ? 'error' : a.outcome === 'cancelled' ? 'stopped' : a.status);
+  /** Sub-agents in launch order (a1, a2, … a10). */
+  const byLaunch = (a, b) => (Number(String(a.id).replace(/\D/g, '')) - Number(String(b.id).replace(/\D/g, ''))) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+  function mapNode(a, isMain) {
+    const busyNow = BUSY.includes(a.status);
+    const title = isMain ? 'Main conversation' : (a.description || a.name);
+    const meta = [isMain ? a.model : a.type, fmtDur(elapsedOf(a)), `${fmtTokens(a.tokens)} tokens`].filter(Boolean).map(esc).join(' · ');
+    const line = busyNow ? `${mapStatus(a)}${a.activity ? ` · ${a.activity}` : ''}` : `${mapStatus(a)}${a.error ? `: ${a.error}` : ''}`;
+    const tip = isMain ? 'Open the main conversation' : `Open this agent: ${a.description || a.name}`;
+    return `<div class="am-node st-${esc(mapState(a))}${a.id === state.agentId ? ' active' : ''}" data-am="${esc(a.id)}" data-main="${isMain ? 1 : 0}" role="button" tabindex="0" title="${esc(tip)}">
+      <div class="am-top"><span class="dot"></span><b class="am-title">${esc(title)}</b>${!isMain && busyNow ? '<button class="icon-btn am-stop" data-amstop="1" title="Stop this agent">■</button>' : ''}</div>
+      <div class="am-meta">${meta}</div>
+      <div class="am-line" title="${esc(line)}">${esc(line)}</div></div>`;
+  }
+
+  function renderAgentMap() {
+    const body = $('amBody'); if (!body) { return; }
+    const main = agents.find((a) => a.role !== 'sub');
+    const subs = agents.filter((a) => a.role === 'sub').sort(byLaunch);
+    const count = (pred) => subs.filter(pred).length;
+    const running = count((a) => a.status === 'running' || a.status === 'waiting');
+    const queued = count((a) => a.status === 'queued');
+    const done = count((a) => !BUSY.includes(a.status) && a.outcome === 'completed');
+    const failed = count((a) => !BUSY.includes(a.status) && a.outcome !== 'completed' && a.outcome !== 'cancelled' && (a.outcome === 'failed' || a.status === 'error'));
+    const stopped = count((a) => !BUSY.includes(a.status) && a.outcome === 'cancelled');
+    const total = agents.reduce((n, a) => n + (a.tokens || 0), 0);
+    const parts = [`${subs.length} sub-agent${subs.length === 1 ? '' : 's'}`, running && `${running} running`, queued && `${queued} queued`,
+      done && `${done} done`, failed && `${failed} failed`, stopped && `${stopped} stopped`, `${fmtTokens(total)} tokens in total`].filter(Boolean);
+    $('amSummary').textContent = parts.join(' · ');
+    const pct = subs.length ? Math.round(((done + failed + stopped) / subs.length) * 100) : 0;
+    $('amProgress').style.width = `${pct}%`;
+    $('amBar').hidden = !subs.length;
+    $('amBar').title = `${done + failed + stopped} of ${subs.length} finished`;
+    const old = $('amKids'); const keep = old ? old.scrollTop : 0;
+    body.innerHTML = `<div class="am-root">${main ? mapNode(main, true) : ''}</div>
+      <div class="am-kids${subs.length ? '' : ' empty'}" id="amKids">${subs.length
+        ? subs.map((a) => `<div class="am-kid">${mapNode(a, false)}</div>`).join('')
+        : '<div class="mempty">No sub-agents yet. Give the main agent several independent tasks (for example a numbered list) and it runs one agent per task in parallel.</div>'}</div>`;
+    $('amKids').scrollTop = keep;
+  }
+
+  function openAgentMap() {
+    $('agentMap')?.remove();
+    const l = document.createElement('div'); l.className = 'modal'; l.id = 'agentMap';
+    l.innerHTML = `<div class="mcard amap" role="dialog" aria-modal="true" aria-label="Agent map"><div class="mtitle">Agent map<button class="icon-btn" id="amClose" title="Close (Esc)">✕</button></div>
+      <div class="am-sum"><span class="muted small" id="amSummary"></span><div class="am-bar" id="amBar" hidden><div id="amProgress"></div></div></div>
+      <div class="am-body" id="amBody"></div></div>`;
+    document.body.appendChild(l);
+    const close = () => l.remove();
+    $('amClose').onclick = close;
+    l.addEventListener('mousedown', (e) => { if (e.target === l) { close(); } });
+    l.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { close(); return; }
+      if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset && e.target.dataset.am) { e.preventDefault(); e.target.click(); }
+    });
+    l.addEventListener('click', (e) => {
+      const node = e.target.closest('[data-am]'); if (!node) { return; }
+      const id = node.dataset.am;
+      if (e.target.closest('[data-amstop]')) { post({ type: 'stopAgent', id }); return; }
+      close();
+      if (id !== state.agentId) { post({ type: node.dataset.main === '1' ? 'backToMain' : 'viewAgent', id }); }
+    });
+    renderAgentMap();
+    $('amClose').focus();
+  }
+  $('mapBtn').onclick = openAgentMap;
+  // Keeps elapsed times ticking while the map is open, even when nothing else changes.
+  setInterval(() => { if ($('agentMap') && agents.some((a) => a.startedAt)) { renderAgentMap(); } }, 1000);
 
   function openLauncher() {
     $('launcher')?.remove();
@@ -866,6 +985,7 @@
   function scrollToReply(turn, h) {
     const el = [...log.querySelectorAll('.msg.assistant')].find((d) => Number(d.dataset.turn) === Number(turn) && hash(d.dataset.raw || '') === h);
     if (!el) { add('info', 'That bookmarked reply is no longer in the conversation.'); return; }
+    pinned = false; jumpBtn.hidden = false;   // reading an older reply: new output must not pull the view away from it
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600);
   }
@@ -915,7 +1035,7 @@
     items.forEach((it) => {
       if (it.sep) { m.insertAdjacentHTML('beforeend', '<div class="sep"></div>'); return; }
       const e = document.createElement('div'); e.className = `item${it.active || it.hl ? ' active' : ''}`;
-      e.innerHTML = `<div class="row"><span>${esc(it.label)}</span>${it.active ? '<span>✓</span>' : ''}</div>${it.desc ? `<span class="d">${esc(it.desc)}</span>` : ''}`;
+      e.innerHTML = `<div class="row"><span>${esc(it.label)}</span>${it.active ? '<span>✓</span>' : ''}</div>${it.desc ? `<span class="d" title="${esc(it.desc)}">${esc(it.desc)}</span>` : ''}`;
       e.onmousedown = (ev) => { ev.preventDefault(); closeMenu(); onPick(it); };
       m.appendChild(e);
     });
@@ -973,6 +1093,7 @@
     if (!t && !images.length) { return; }
     post({ type: 'send', text: t, images: images.map(({ name, mime, dataUrl, thumb }) => ({ name, mime, dataUrl, thumb })) });
     input.value = ''; images = []; renderAttach(); autosize(); hidePopup();
+    scroll(true);   // sending always jumps to the latest and follows again, even when queued or sent mid-turn
   }
   function autosize() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, innerHeight * 0.4)}px`; }
   $('send').onclick = send;
