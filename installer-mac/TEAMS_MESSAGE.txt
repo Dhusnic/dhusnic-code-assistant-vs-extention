@@ -1,13 +1,12 @@
 Hi team 👋
 
-Infraon Code Assistant 0.24.0 is out for Mac. The assistant can now use the internet for research 🌐
+Infraon Code Assistant 0.25.0 is out for Mac. Long tasks now run to the end, and the task list keeps up 🚀
 
 🆕 What's new
-• Searches the web and reads pages, PDFs, Word/Excel/PowerPoint files and images
-• Looks up research papers, npm/PyPI/Maven packages, known vulnerabilities (CVEs), GitHub repos and RFCs
-• /research <topic> writes a cited report into your project's research folder
-• Every answer cites its sources as [1], [2]…; /sources lists them
-• Safe by default: the first request to a new website asks for your approval, and secrets are never sent out
+• Long tasks run to the end: an agent can now take up to 1200 steps per request (was 50–120), so building a whole feature or project no longer stops halfway with "Send continue"
+• The Tasks card keeps up: the agent marks each step done as it works, instead of piling everything under step 1
+• A step left open when the agent stops now shows as paused, not as an endless spinner
+• Projects the agent creates from scratch get their tests run automatically before it finishes
 
 🔄 Already installed? Update in 1 minute
 1. Download and extract the attached zip: InfraonCodeAssistant-Mac-Installer.zip
@@ -30,6 +29,6 @@ If the .command doesn't open: open Terminal, type "bash " (with a space), drag i
 
 Windows users: use the separate Windows installer zip.
 
-Try it: /research Compare Kafka, Pulsar and NATS for event streaming
+Try it: switch to Plan mode and ask "Build a small REST API with tests for a todo list"
 
 Problems? Reply here with a screenshot of the Terminal window. Thanks!

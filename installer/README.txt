@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.24.0 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.25.0 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -22,12 +22,13 @@ What the installer does
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
 
-New in 0.24.0: internet access for research
-- The assistant can search the web, read pages, PDFs, Word/Excel/PowerPoint files and images, and
-  look up papers, packages, vulnerabilities, GitHub repos and RFCs, with numbered citations.
-- Try:  /research <topic>   /sources   /web
-- The first request to a new website asks for your approval.
-- Optional: /web key to add a search API key (Brave, Tavily, Bing or Google) for better search results.
+New in 0.25.0: long tasks run to the end
+- An agent can now take up to 1200 tool steps per request (was 50-120), so big jobs such as building a
+  project no longer stop halfway with "Send continue". Setting: infraonAssistant.maxIterations
+  (0 = the old per-effort limits).
+- The Tasks card keeps up: the agent marks each step done as it goes, instead of leaving all the work
+  under step 1. A step left open when the agent stops shows as paused, not as an endless spinner.
+- Projects the agent creates from scratch are tested automatically before it finishes.
 
 Notes
 - Do NOT double-click the .vsix file. Windows opens it in the Visual Studio installer, which fails.
