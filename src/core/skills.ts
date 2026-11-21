@@ -3,7 +3,7 @@ import * as path from 'path';
 import { ToolSpec } from './llm';
 import { fnSpec } from './tool';
 import { TOOL_ALIASES } from './agentTypes';
-import { Frontmatter, parseFrontmatter } from './frontmatter';
+import { parseFrontmatter } from './frontmatter';
 
 /**
  * Skills, compatible with Claude Code:
@@ -35,7 +35,6 @@ export const SKILL_TOOL = 'skill';
 const MAX_LISTED_DESCRIPTION = 300;
 const MAX_TOOL_DESCRIPTION = 12000;
 
-type Fm = Frontmatter;
 export { parseFrontmatter };
 
 const str = (v: string | string[] | undefined): string => (Array.isArray(v) ? v.join(' ') : v ?? '').trim();
@@ -225,7 +224,7 @@ What to report back to the user when done.`;
 
 /* ------------------------------------------------------------------ quality checks, editing, sharing */
 
-export const KNOWN_TOOLS = ['read_file', 'write_file', 'edit_file', 'multi_edit', 'list_dir', 'glob_files', 'grep', 'run_command', 'get_diagnostics', 'find_definition', 'find_references', 'document_symbols', 'workspace_symbols', 'rename_symbol', 'agent', 'ask_user_question', 'todo_write',
+export const KNOWN_TOOLS = ['read_file', 'write_file', 'edit_file', 'multi_edit', 'list_dir', 'glob_files', 'grep', 'search_code', 'run_command', 'get_diagnostics', 'find_definition', 'find_references', 'document_symbols', 'workspace_symbols', 'rename_symbol', 'agent', 'ask_user_question', 'todo_write',
   'web_search', 'web_fetch', 'web_download', 'web_diff', 'web_library', 'web_sources', 'paper_search', 'paper_details', 'package_info', 'vuln_lookup', 'github_lookup', 'tech_search'];
 const RESERVED = ['help', 'clear', 'new', 'reset', 'undo', 'rewind', 'history', 'chats', 'plan', 'mode', 'effort', 'model', 'init', 'review', 'compact', 'mcp', 'agents', 'skills'];
 

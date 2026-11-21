@@ -102,3 +102,34 @@ test('a project created during the turn gets its checks detected and run before 
   assert.equal(asked, 2, 'checked at the start (nothing yet) and again once files exist');
   assert.ok(ui.events.some((e) => /Project checks passed: test/.test(e)), ui.events.join('\n'));
 });
+
+test('reaching the tool-round limit with open steps leaves a reminder for the next turn', async () => {
+  const root = await tmpDir('todo-rem-');
+  const work = Array.from({ length: 5 }, (_, i) => call('list_dir', { path: '.' }, `L${i}`));
+  const llm = fakeLlm([call('todo_write', LIST('in_progress'), 'T1'), ...work]);
+  const agent = new Agent({
+    root, llm: llm.fn, limits: () => ({ maxIterations: 3 }),
+    getConfig: () => ({ baseUrl: '', apiKey: '', model: 'm', temperature: 0, allowSelfSigned: true }), tools: () => createFsTools(),
+  });
+  await agent.send('build it', OPTS, recordingUi());
+  const last = agent.history.at(-1)!;
+  assert.equal(last.role, 'tool', 'no extra user message is added');
+  assert.match(String(last.content), /<system-reminder>You are ending your turn, but the task list still has 2 unfinished steps/);
+});
+
+test('compaction keeps the latest unfinished task list, so reminders still work afterwards', async () => {
+  const { agent } = await build([
+    call('todo_write', LIST('in_progress'), 'T1'), text('first turn done'), text('stopping here on purpose'),
+    text('second turn'),
+    text('SUMMARY OF EARLIER WORK'),
+  ]);
+  await agent.send('build it', OPTS, recordingUi());
+  await agent.send('status?', OPTS, recordingUi());
+  assert.ok(agent.todoState().todos, 'list present before compaction');
+  assert.equal(await agent.compact(OPTS, recordingUi(), true), true);
+  assert.match(String(agent.history[0].content), /SUMMARY OF EARLIER WORK/);
+  assert.equal(agent.history[1].tool_calls?.[0].function.name, 'todo_write', 'carried on the summary acknowledgement');
+  assert.equal(agent.history[2].role, 'tool');
+  assert.equal(agent.history[2].tool_call_id, agent.history[1].tool_calls?.[0].id);
+  assert.deepEqual(agent.todoState().todos?.map((t) => t.status), ['in_progress', 'pending']);
+});

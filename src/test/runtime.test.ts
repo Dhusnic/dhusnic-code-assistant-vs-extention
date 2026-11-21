@@ -114,7 +114,8 @@ test('each agent has its own approvals; waiting status and activity are visible;
   const b = h.mgr.addAgent(s.id);
   const r1 = h.mgr.send(s.id, 'a1', 'alpha');
   const r2 = h.mgr.send(s.id, b.id, 'beta');
-  await sleep(30);
+  // Wait for both prompts rather than a fixed delay: next to 1000 parallel tests 30 ms was sometimes not enough.
+  for (let i = 0; i < 300 && h.mgr.snapshot()[0].agents.some((a) => a.status !== 'waiting'); i++) { await sleep(10); }
   const view = h.mgr.snapshot()[0].agents;
   assert.deepEqual(view.map((a) => a.status), ['waiting', 'waiting']);
   assert.match(view[0].activity, /Waiting for approval: Write alpha\.txt/);

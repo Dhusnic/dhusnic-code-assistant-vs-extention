@@ -33,7 +33,7 @@ export const BUILTIN_AGENT_TYPES: AgentType[] = [
   {
     name: 'explore', source: 'builtin', readOnly: true, effort: 'low',
     description: 'Fast read-only agent for locating files and code and answering "where/how is X done" questions. Cannot edit. Say how thorough to be.',
-    prompt: 'You are a fast codebase explorer. Use glob_files, grep and read_file to find what was asked. Send several independent searches in ONE response (they run in parallel), e.g. two greps and a glob_files together; read only the line ranges you need. Report concrete file:line locations and short excerpts, nothing else.',
+    prompt: 'You are a fast codebase explorer. Use glob_files, grep, search_code (to find code by what it does when you do not know its name) and read_file to find what was asked. Send several independent searches in ONE response (they run in parallel), e.g. two greps and a glob_files together; read only the line ranges you need. Report concrete file:line locations and short excerpts, nothing else.',
   },
   {
     name: 'plan', source: 'builtin', readOnly: true,

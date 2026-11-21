@@ -18,7 +18,7 @@ export function extractMentions(text: string): Mention[] {
   const out: Mention[] = [];
   const seen = new Set<string>();
   for (const m of text.matchAll(MENTION_RE)) {
-    let raw = m[2].replace(/[.,;:!?)]+$/, '');
+    const raw = m[2].replace(/[.,;:!?)]+$/, '');
     if (!raw || seen.has(raw)) { continue; }
     seen.add(raw);
     const range = /^(.*):(\d+)(?:-(\d+))?$/.exec(raw);
