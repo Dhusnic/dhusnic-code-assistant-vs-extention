@@ -44,9 +44,29 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: Unit tests
-        run: npm run test:unit
+        shell: bash
+        run: |
+          set -o pipefail
+          npx tsc -p .
+          node --test "out/test/*.test.js" 2>&1 | tee unit-results.txt
       - name: Slow tests (serial)
-        run: node --test --test-concurrency=1 "out/test/slow/*.test.js"
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --test-concurrency=1 "out/test/slow/*.test.js" 2>&1 | tee slow-results.txt
+      # Job logs need admin rights; annotations are visible to everyone (PR checks page and the API).
+      - name: Report failing tests as annotations
+        if: failure()
+        shell: bash
+        run: |
+          for f in unit-results.txt slow-results.txt; do
+            [ -f "$f" ] || continue
+            # The spec reporter repeats every failure after "failing tests:", with its location and error.
+            summary=$(sed -n '/failing tests:/,$p' "$f" | grep -vE '^\s+at ' | head -c 6000)
+            summary=${summary//'%'/'%25'}; summary=${summary//$'\r'/}; summary=${summary//$'\n'/'%0A'}
+            [ -n "$summary" ] && echo "::error title=Failing tests ($f, ${{ matrix.os }})::$summary"
+          done
+          true
 
   package:
     name: Package .vsix
