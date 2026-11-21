@@ -1,20 +1,16 @@
 src/**
-out/test/**
+out/**
+# only the bundle ships from dist/ (deploy.ps1 also stages signed releases in dist/updates/)
+dist/**
+!dist/extension.js
 **/*.map
 node_modules/**
-# runtime dependency of the SSH tools (pure JavaScript; native extras are not shipped)
-!node_modules/ssh2/**
-!node_modules/asn1/**
-!node_modules/bcrypt-pbkdf/**
-!node_modules/safer-buffer/**
-!node_modules/tweetnacl/**
+# ssh2 is bundled into dist/extension.js by scripts/bundle.mjs, so no node_modules are shipped
 .vscode/**
 tsconfig.json
 deploy.ps1
 *.vsix
-out/e2e/**
 .e2e/**
-out/eval/**
 eval/**
 eval-results/**
 # installers and their zips are distributed separately, never inside the extension
@@ -23,3 +19,16 @@ installer/**
 installer-mac/**
 .gitattributes
 server/**
+# development-only configuration
+eslint.config.mjs
+.prettierrc.json
+.prettierignore
+.github/**
+coverage/**
+docs/**
+CONTRIBUTING.md
+CLAUDE.md
+scripts/bundle.mjs
+scripts/build-installers.js
+scripts/sign-update.js
+.gitignore

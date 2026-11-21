@@ -8,7 +8,6 @@ import { buildSessionHtml, buildSidebarHtml } from '../core/html';
 const ROOT = path.join(__dirname, '..', '..');
 const MEDIA = path.join(ROOT, 'media');
 const read = (f: string) => fs.readFileSync(path.join(MEDIA, f), 'utf8');
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { md, esc } = require(path.join(MEDIA, 'md.js'));
 
 const parts = { nonce: 'N0NCE', cspSource: 'vscode-resource:', cssUri: 'c.css', jsUri: 'c.js', mdUri: 'm.js', mermaidUri: 'mm.js', logoSvg: '<svg viewBox="0 0 1 1"></svg>' };
@@ -79,7 +78,18 @@ test('manifest: sidebar view, tab serializer activation, commands and icon are w
   const ext = fs.readFileSync(path.join(ROOT, 'src', 'host', 'extension.ts'), 'utf8') + fs.readFileSync(path.join(ROOT, 'src', 'host', 'features', 'editorActions.ts'), 'utf8');
   for (const c of cmds) { assert.ok(ext.includes(`'${c}'`), `${c} declared but not registered`); }
   assert.ok(fs.existsSync(path.join(ROOT, 'scripts', 'ocr.ps1')), 'OCR script ships with the extension');
-  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, '.vscodeignore'), 'utf8'), /^scripts/m);
+  const ignore = fs.readFileSync(path.join(ROOT, '.vscodeignore'), 'utf8');
+  const lines = ignore.split(/\r?\n/);
+  // Build-only scripts may be excluded one by one, but never a glob over scripts/ and never the OCR script itself.
+  for (const line of lines.filter((l) => /^scripts/.test(l))) {
+    assert.match(line, /^scripts\/[\w.-]+\.(m?js)$/, `.vscodeignore may only drop individual build scripts: ${line}`);
+  }
+  // Release output (signed update files, zips handed to IT) must never be packed into the extension itself.
+  for (const p of ['dist/**', 'server/**', '*.vsix', '*.zip']) { assert.match(ignore, new RegExp(`^${p.replace(/[.*]/g, '\\$&')}\\r?$`, 'm'), p); }
+  // From dist/ only the bundle (package.json main) is shipped, and the re-include must come after `dist/**`.
+  const pkgMain = pkg.main.replace(/^\.\//, '');
+  assert.deepEqual(lines.filter((l) => l.startsWith('!dist/')), [`!${pkgMain}`]);
+  assert.ok(lines.indexOf(`!${pkgMain}`) > lines.indexOf('dist/**'), 'the bundle is re-included after dist/** is excluded');
 });
 
 test('md: escapes HTML and script injection', () => {

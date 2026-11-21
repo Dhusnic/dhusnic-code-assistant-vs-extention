@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import type { LlmConfig, LlmFn } from '../../core/llm';
-import { buildFixPrompt, buildInlineEditMessages, cleanInlineEdit } from '../../core/inlineEdit';
+import { DOCUMENT_INSTRUCTION, buildFixPrompt, buildInlineEditMessages, buildTestsPrompt, cleanInlineEdit } from '../../core/inlineEdit';
 
 export interface EditorHost { llmConfig(): Promise<LlmConfig>; llm: LlmFn; root: string; startSession(prompt: string): Promise<void> }
 
@@ -201,6 +201,33 @@ export function registerEditorActions(ctx: vscode.ExtensionContext, getHost: () 
     await host.startSession(buildFixPrompt({ message: String(message ?? 'the reported problem') }, relative(host.root, t.doc), t.range.start.line + 1, t.doc.getText(t.range)));
   });
 
+  /** The code to act on: the range a light-bulb action passed, else the active editor's selection (whole lines). */
+  const selected = async (uri: unknown, r: unknown): Promise<{ doc: vscode.TextDocument; range: vscode.Range } | undefined> => {
+    const range = toRange(r);
+    if (uri instanceof vscode.Uri && range) {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      return { doc, range: wholeLines(doc, doc.validateRange(range)) };
+    }
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !editable(editor.document) || editor.selection.isEmpty) { void vscode.window.showInformationMessage('Infraon: select the code first.'); return undefined; }
+    return { doc: editor.document, range: wholeLines(editor.document, editor.selection) };
+  };
+
+  const documentSelection = safe(async (uri: unknown, r: unknown) => {
+    const t = await selected(uri, r);
+    if (!t) { return; }
+    await propose(t.doc, t.range, t.doc.version, DOCUMENT_INSTRUCTION, 'adding documentation');
+  });
+
+  const generateTests = safe(async (uri: unknown, r: unknown) => {
+    const t = await selected(uri, r);
+    if (!t) { return; }
+    const code = t.doc.getText(t.range);
+    if (code.length > MAX_SELECTION_CHARS) { throw new Error('the selection is too large. Select one function or class at a time.'); }
+    const host = await getHost();
+    await host.startSession(buildTestsPrompt(relative(host.root, t.doc), t.range.start.line + 1, t.range.end.line + 1, code, t.doc.languageId));
+  });
+
   const kinds = [vscode.CodeActionKind.QuickFix, vscode.CodeActionKind.RefactorRewrite];
   const provider: vscode.CodeActionProvider = {
     provideCodeActions(doc, range, cc) {
@@ -226,6 +253,12 @@ export function registerEditorActions(ctx: vscode.ExtensionContext, getHost: () 
         const rewrite = new vscode.CodeAction('Edit with Infraon', vscode.CodeActionKind.RefactorRewrite);
         rewrite.command = { command: 'infraonAssistant.inlineEdit', title: 'Edit with Infraon' };
         out.push(rewrite);
+        const docs = new vscode.CodeAction('Add documentation with Infraon', vscode.CodeActionKind.RefactorRewrite);
+        docs.command = { command: 'infraonAssistant.documentSelection', title: docs.title, arguments: [doc.uri, range] };
+        out.push(docs);
+        const tests = new vscode.CodeAction('Generate tests with Infraon', vscode.CodeActionKind.RefactorRewrite);
+        tests.command = { command: 'infraonAssistant.generateTests', title: tests.title, arguments: [doc.uri, range] };
+        out.push(tests);
       }
       return out;
     },
@@ -236,6 +269,8 @@ export function registerEditorActions(ctx: vscode.ExtensionContext, getHost: () 
     vscode.commands.registerCommand('infraonAssistant.inlineEdit', inlineEdit),
     vscode.commands.registerCommand('infraonAssistant.fixDiagnostic', fixDiagnostic),
     vscode.commands.registerCommand('infraonAssistant.fixInSession', fixInSession),
+    vscode.commands.registerCommand('infraonAssistant.documentSelection', documentSelection),
+    vscode.commands.registerCommand('infraonAssistant.generateTests', generateTests),
     vscode.commands.registerCommand('infraonAssistant.inlineEdit.accept', accept),
     vscode.commands.registerCommand('infraonAssistant.inlineEdit.reject', reject),
   ];

@@ -30,8 +30,7 @@ async function harness(brain: Brain, opts: { max?: number; storeDir?: string; ty
   const seenTools: Record<string, string[]> = {};
   const events: Array<[string, UiEvent]> = [];
   let n = 0;
-  let mgr!: SessionManager;
-  mgr = new SessionManager({
+  const mgr: SessionManager = new SessionManager({
     store, agentTypes: () => types, maxConcurrent: () => opts.max ?? 4, newSessionId: () => `s${++n}`, saveThrottleMs: 10,
     defaults: () => ({ mode: opts.mode ?? 'auto', effort: 'medium', model: 'm' }),
     onEvent: (_s, a, e) => events.push([a, e]),

@@ -1,0 +1,9 @@
+out/
+dist/
+node_modules/
+media/vendor/
+installer/
+installer-mac/
+.e2e/
+*.vsix
+*.zip

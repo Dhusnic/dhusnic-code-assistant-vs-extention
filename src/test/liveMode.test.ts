@@ -34,8 +34,7 @@ async function harness(brain: Brain, mode: Mode) {
   const root = await tmpDir('lm-root-');
   const events: Array<[string, UiEvent]> = [];
   let n = 0;
-  let mgr!: SessionManager;
-  mgr = new SessionManager({
+  const mgr: SessionManager = new SessionManager({
     store: new SessionStore2(await tmpDir('lm-store-')), agentTypes: () => BUILTIN_AGENT_TYPES, newSessionId: () => `s${++n}`, saveThrottleMs: 10,
     defaults: () => ({ mode, effort: 'medium', model: 'm' }),
     onEvent: (_s, a, e) => events.push([a, e]),
@@ -75,8 +74,7 @@ function writer(files: string[], before: (i: number) => Promise<void> = async ()
 test('a mode switched during a run makes the later tool calls run without asking', async () => {
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
-  let h!: Awaited<ReturnType<typeof harness>>;
-  h = await harness(writer(['a.txt', 'b.txt'], async (i) => { if (i === 0) { await gate; } }), 'ask');
+  const h = await harness(writer(['a.txt', 'b.txt'], async (i) => { if (i === 0) { await gate; } }), 'ask');
   const run = h.mgr.send(h.sid, 'a1', 'write two files');
   await until(() => h.main.status === 'running');
   h.mgr.setSettings(h.sid, 'a1', { mode: 'auto' });

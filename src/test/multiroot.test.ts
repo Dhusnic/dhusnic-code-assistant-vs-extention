@@ -90,7 +90,9 @@ test('run_command runs in another folder with cwd; bad cwd is refused', async ()
   const { api, base, ctx } = await workspace();
   const cmd = process.platform === 'win32' ? '(Get-Location).Path' : 'pwd';
   const out = await tool('run_command').run({ command: cmd, cwd: 'api' }, ctx);
-  assert.ok(out.toLowerCase().includes(api.toLowerCase()), out);
+  // Compare real paths: a temp folder may be reported in 8.3 short form (C:UsersRUNNER~1...) while the shell prints the long one.
+  const real = (await fs.realpath(api)).toLowerCase();
+  assert.ok(out.toLowerCase().includes(real), `${out} should contain ${real}`);
   assert.match(out, /\[exit 0\]$/);
   await assert.rejects(tool('run_command').run({ command: cmd, cwd: 'api/server/routes.py' }, ctx), /not a directory/);
   await assert.rejects(tool('run_command').run({ command: cmd, cwd: base }, ctx), /Path outside workspace/);

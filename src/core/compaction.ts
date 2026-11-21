@@ -1,4 +1,4 @@
-import { ChatMessage } from './llm';
+import { ChatMessage, ToolCall } from './llm';
 import { SUMMARY_PREFIX } from './sessions';
 
 export const DEFAULT_CONTEXT = 262144;
@@ -56,9 +56,12 @@ export interface CompactResult { history: ChatMessage[]; turnStarts: number[]; s
  * Replaces everything before the latest user turn with a summary pair. The latest turn is kept verbatim so
  * tool_call/tool pairs stay intact. Earlier turn indexes are kept (pointing at the summary) so checkpoint
  * numbering and /undo keep working.
+ * `carry` is a tool call (with its result) that must outlive the summary, such as the latest task list: it is
+ * attached to the summary's acknowledgement so the message order stays valid.
  */
 export async function compactHistory(
   history: ChatMessage[], turnStarts: number[], summarize: (transcript: string) => Promise<string>,
+  carry?: { call: ToolCall; result: string },
 ): Promise<CompactResult> {
   const tailStart = turnStarts.length ? turnStarts[turnStarts.length - 1] : 0;
   if (tailStart <= 0 || turnStarts.length < 2) { return { history, turnStarts, summarized: false }; }
@@ -66,7 +69,8 @@ export async function compactHistory(
   if (!summary) { return { history, turnStarts, summarized: false }; }
   const head: ChatMessage[] = [
     { role: 'user', content: `${SUMMARY_PREFIX}\n${summary}` },
-    { role: 'assistant', content: SUMMARY_ACK },
+    carry ? { role: 'assistant', content: SUMMARY_ACK, tool_calls: [carry.call] } : { role: 'assistant', content: SUMMARY_ACK },
+    ...(carry ? [{ role: 'tool' as const, tool_call_id: carry.call.id, content: carry.result }] : []),
   ];
   return {
     history: [...head, ...history.slice(tailStart)],

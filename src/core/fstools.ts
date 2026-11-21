@@ -6,6 +6,7 @@ import { ReadTracker, Tool, ToolCtx, WorkspaceRoot, fnSpec } from './tool';
 import { withFileLock } from './locks';
 import { SKIP_DIRS, filterFiles, globToRegex, hasGlobChars, matchesGlob } from './glob';
 import { EnginePreference, FileIndex, SearchMode, SearchOptions, formatSearch, search } from './search';
+import { CodeIndex, formatCodeHits } from './codeSearch';
 
 export { SKIP_DIRS, globToRegex, matchesGlob };
 
@@ -320,6 +321,12 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
     if (!idx) { idx = new FileIndex(root); indexes.set(root, idx); }
     return idx;
   };
+  const codeIndexes = new Map<string, CodeIndex>();
+  const codeIndexFor = (root: string): CodeIndex => {
+    let idx = codeIndexes.get(root);
+    if (!idx) { idx = new CodeIndex(root, indexFor(root)); codeIndexes.set(root, idx); }
+    return idx;
+  };
   return [
     {
       kind: 'read',
@@ -461,6 +468,23 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
         const res = await search({ root: scope.root, index: indexFor(scope.root), rgPath: opts.rgPath, prefer: opts.prefer }, o, ctx.signal);
         if (scope.prefix) { res.files = res.files.map((f) => ({ ...f, file: scope.prefix + f.file })); }
         return formatSearch(res, { ...o, path: a.path });
+      },
+    },
+    {
+      kind: 'read',
+      spec: fnSpec('search_code',
+        'Find code by what it does when you do not know the exact identifier: describe it in a few words (e.g. "expired session cleanup", "retry http request with backoff"). Ranks ~40-line code regions by word relevance; identifiers are split into words (getUserName matches "user name") and file names count extra. Returns file:line ranges with the matching lines. Use grep instead for an exact name or regex.',
+        {
+          query: { type: 'string', description: 'words describing the code you are looking for' },
+          path: { type: 'string', description: 'optional sub-directory to search in' },
+          max_results: { type: 'number', description: 'number of code regions to return (default 8, max 30)' },
+        }, ['query']),
+      describe: (a) => `Search code for "${a.query}"${a.path ? ` in ${a.path}` : ''}`,
+      async run(a, ctx) {
+        const scope = searchScope(ctx, a.path);
+        const idx = codeIndexFor(scope.root);
+        const hits = await idx.search(String(a.query ?? ''), { max: typeof a.max_results === 'number' ? a.max_results : undefined, under: scope.rel, signal: ctx.signal });
+        return formatCodeHits(hits, String(a.query ?? ''), idx.truncated, scope.prefix);
       },
     },
     {

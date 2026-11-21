@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as path from 'path';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { md } = require(path.join(__dirname, '..', '..', 'media', 'md.js'));
 
 test('tables: the exact answer from the bug report (blank lines between rows) renders as a table', () => {
@@ -71,7 +70,6 @@ test('tables: a horizontal rule under a line that happens to contain pipes is no
   assert.match(out, /<hr>/);
 });
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { inline: mdInline, autolink } = require(path.join(__dirname, '..', '..', 'media', 'md.js'));
 
 test('links: the sources line from the bug report renders as two clickable links', () => {

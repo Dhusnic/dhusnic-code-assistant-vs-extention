@@ -62,7 +62,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const workbench = () => import('./features/workbench');
 
   // This module is small: its providers and commands load the LLM and hub only when they are used.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   (require('./features/editorActions') as typeof import('./features/editorActions')).registerEditorActions(context, async () => (await hub()).editorHost());
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
@@ -100,6 +99,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('infraonAssistant.explainSelection', async () => selectionPrompt(await hub(), 'Explain this code')),
     vscode.commands.registerCommand('infraonAssistant.fixSelection', async () => selectionPrompt(await hub(), 'Find and fix problems in this code, and apply the fix')),
+    vscode.commands.registerCommand('infraonAssistant.generateCommitMessage', async (repo?: unknown) => {
+      try { await (await import('./features/scm')).generateCommitMessage(await hub(), repo); } catch (e) { void vscode.window.showErrorMessage(`Infraon: ${e instanceof Error ? e.message : String(e)}`); }
+    }),
     vscode.commands.registerCommand('infraonAssistant.searchSessions', async () => (await workbench()).searchPicker(await hub())),
     vscode.commands.registerCommand('infraonAssistant.editMemory', async () => (await workbench()).editMemory(await hub())),
     vscode.commands.registerCommand('infraonAssistant.openPermissions', async () => (await workbench()).editPermissions(await hub())),

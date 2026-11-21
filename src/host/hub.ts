@@ -96,6 +96,7 @@ export class Hub {
     ctx.subscriptions.push(this.remote);
     // Saved server passwords are masked from the first message on, even before the agent connects.
     void this.remote.preloadSecrets();
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- getters below need the hub, not the options object
     const hub = this;
     this.web = new WebService({
       ctx, output: this.output,
