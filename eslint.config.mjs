@@ -24,6 +24,11 @@ export default tseslint.config(
     },
   },
   {
+    // Node build scripts written as ES modules (scripts/bundle.mjs).
+    files: ['**/*.mjs'],
+    languageOptions: { sourceType: 'module', globals: { process: 'readonly', console: 'readonly' } },
+  },
+  {
     // Browser-side webview scripts and Node build scripts are plain JavaScript.
     files: ['media/**/*.js', 'scripts/**/*.js', 'src/test/fixtures/**/*.js'],
     languageOptions: {

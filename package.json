@@ -716,7 +716,7 @@
         "watch:bundle": "node scripts/bundle.mjs --watch",
         "bundle": "node scripts/bundle.mjs --production",
         "package": "vsce package",
-        "lint": "eslint .",
+        "lint": "eslint . --max-warnings 0",
         "lint:fix": "eslint . --fix",
         "format": "prettier --write",
         "format:check": "prettier --check",

@@ -30,8 +30,7 @@ async function harness(brain: Brain, opts: { max?: number; storeDir?: string } =
   const store = new SessionStore2(opts.storeDir ?? await tmpDir('am-store-'));
   const types: AgentType[] = BUILTIN_AGENT_TYPES;
   let n = 0;
-  let mgr!: SessionManager;
-  mgr = new SessionManager({
+  const mgr: SessionManager = new SessionManager({
     store, agentTypes: () => types, maxConcurrent: () => opts.max ?? 4, newSessionId: () => `s${++n}`, saveThrottleMs: 10,
     defaults: () => ({ mode: 'auto', effort: 'medium', model: 'm' }),
     createAgent: (sid, aid, spec) => {
