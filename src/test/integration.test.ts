@@ -128,6 +128,8 @@ test('the 3.5 MB diagram library is not loaded until a diagram appears', () => {
 });
 
 test('manifest: every new setting read by the code is declared', () => {
-  const props = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).contributes.configuration.properties;
+  // Settings are split into categories (an array); a plain object is accepted too.
+  const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).contributes.configuration;
+  const props = Object.assign({}, ...[config].flat().map((c: any) => c.properties));
   for (const k of ['redactSecrets', 'auditLog', 'agentWorktrees', 'visibleTerminal', 'modelRouting', 'teamSkills', 'policyUrl', 'notifications.enabled']) { assert.ok(props[`infraonAssistant.${k}`], k); }
 });

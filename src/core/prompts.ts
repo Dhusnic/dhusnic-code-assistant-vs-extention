@@ -33,6 +33,7 @@ You can call several tools in ONE response. Independent calls run at the same ti
 # Searching code
 - Locate files by name with glob_files (a fragment like "cmdb_controller" works). Search contents with grep: start broad with output_mode "files" or "count", then narrow with glob/path and read matches with output_mode "content" and context lines.
 - Search for several likely names at once with one regex alternation (e.g. "getUser|fetchUser|load_user") rather than many sequential searches.
+- When you do not know what the code is called, use search_code with a few words describing what it does (e.g. "expired session cleanup"); then grep the identifiers it finds.
 - Read only what you need: use read_file line ranges on large files around the matches grep found.
 - Prefer the dedicated tools (read_file, grep, glob_files, list_dir, edit_file) over shell equivalents (cat, grep, find, sed); they are faster, respect .gitignore and need no approval.
 - Large outputs are truncated: narrow with line ranges, globs or more specific patterns instead of repeating the same call.

@@ -1,124 +1,43 @@
-import { ChatMessage, LlmConfig, LlmFn, StreamResult, ToolCall, ToolSpec } from './llm';
+/**
+ * The agent loop: one conversation with the model, its tool calls (run in parallel where safe, each one checked by
+ * the mode, the permission rules and hooks), approvals, plan mode, sub-agents, compaction, rewind, and the project
+ * checks that must pass before a turn that changed files may end.
+ *
+ * Split across modules, all re-exported from here so callers import from './agent' only:
+ *   agentContracts.ts  the interfaces to the UI, the safety layer, the host's dependencies and sub-agent spawning
+ *   agentTools.ts      the built-in tools as the model sees them, and the system prompt
+ *   checks.ts          which project checks to run for a set of changes, and how their output is read
+ */
+import { ChatMessage, StreamResult, ToolCall, ToolSpec } from './llm';
 import { contextLimitFromError, isContextLengthError } from './modelInfo';
 import { parseTextToolCalls } from './textToolCalls';
-import { ApprovalPreview, Tool, ToolKind, fnSpec } from './tool';
-import { AgentType, BUILTIN_AGENT_TYPES, DEFAULT_AGENT_TYPE } from './agentTypes';
-import { Answers, MAX_OPTIONS, MAX_QUESTIONS, UserQuestion, formatAnswers, validateQuestions } from './questions';
-import { MAX_TODOS, TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoReminder, unfinishedTodos, validateTodos } from './todos';
-import { SKILL_TOOL, Skill, expandSkill, findSkill, skillToolSpec } from './skills';
-import { Effort, Mode, effortParams, isAllowed, requiresApproval } from './policy';
-import { BASE_PROMPT, FANOUT_PROMPT, environmentSection } from './prompts';
+import { ApprovalPreview, Tool } from './tool';
+import { BUILTIN_AGENT_TYPES, DEFAULT_AGENT_TYPE } from './agentTypes';
+import { Answers, formatAnswers, validateQuestions } from './questions';
+import { TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoReminder, unfinishedTodos, validateTodos } from './todos';
+import { SKILL_TOOL, expandSkill, findSkill, skillToolSpec } from './skills';
+import { Mode, effortParams, isAllowed, requiresApproval } from './policy';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
 import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact } from './compaction';
 import * as path from 'path';
 import { FileReadTracker, clipOutput, resolveIn } from './fstools';
-import { FileChangeFeed } from './changeJournal';
-import { WorkspaceRoot } from './tool';
+import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
+import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, MAX_CHECK_ROUNDS, NOT_RUN, checkLabel, checksPromptSection, exitCodeOf, scopeChecks } from './checks';
+import {
+  AGENT_TOOL, DELEGATION_TOOLS, PLAN_SPEC, PLAN_TOOL, QUESTION_SPEC, QUESTION_TOOL, SEND_SPEC, SEND_TOOL, TODO_SPEC, TODO_TOOL,
+  agentToolSpec, buildSystemPrompt, queuedMessageText,
+} from './agentTools';
 
-export interface ApprovalRequest {
-  id: string;
-  kind: ToolKind;
-  name: string;
-  detail: string;
-  preview?: ApprovalPreview;
-  /** Why approval is needed when it is not just the mode (a rule, a server setting, a dangerous command). */
-  reason?: string;
-}
+export * from './agentContracts';
+export * from './checks';
+export * from './agentTools';
+export { BASE_PROMPT } from './prompts';
 
-export interface AgentUi {
-  token(t: string): void;
-  toolStart(id: string, name: string, kind: ToolKind, args: string, detail: string, preview?: ApprovalPreview): void;
-  toolEnd(id: string, ok: boolean, result: string): void;
-  approve(req: ApprovalRequest): Promise<boolean>;
-  info(t: string): void;
-  usage?(used: number, limit: number): void;
-  /** Shows the proposed plan; resolves to the mode to continue in, or null if the user wants more planning. */
-  approvePlan?(id: string, plan: string): Promise<Mode | null>;
-  modeChanged?(mode: Mode): void;
-  /** The agent settled a waiting approval itself (the mode changed so it no longer needs the user): remove the prompt. */
-  approvalSettled?(id: string, label: string): void;
-  /** Shows clarifying questions; resolves with the answers, or null if the user skipped them. */
-  askUser?(id: string, questions: UserQuestion[]): Promise<Answers | null>;
-  /** The agent's task list changed (todo_write). */
-  todos?(items: TodoInput[]): void;
-  /** Messages the user queued while the agent was working were just handed to the model. */
-  userInjected?(items: QueuedInput[]): void;
-  /** Live progress lines from a running sub-agent, shown inside its task card. */
-  subProgress?(parentId: string, text: string): void;
-  /** Tokens one model call consumed (prompt + completion), for per-agent monitoring. */
-  spent?(tokens: number): void;
-  /** End of a turn that changed files: which files, and which checks ran after the last change. */
-  verification?(v: { changed: string[]; checks: Array<{ label: string; ok: boolean }> }): void;
-}
-
-export interface RunOptions { mode: Mode; effort: Effort; model: string }
-
-/** A message the user sent while the agent was busy; delivered with the agent's next model call. */
-export interface QueuedInput { text: string; display: string; files?: string[]; thumbs?: string[] }
-
-/** Wraps mid-turn user messages so the model knows they arrived while it was working. */
-export function queuedMessageText(texts: string[]): string {
-  return `The user sent ${texts.length > 1 ? 'these messages' : 'this message'} while you were working:\n${texts.map((t) => `<user-message>\n${t}\n</user-message>`).join('\n')}\n\nTake ${texts.length > 1 ? 'them' : 'it'} into account now: ${texts.length > 1 ? 'they' : 'it'} may add to, change, redirect or cancel the current task. Briefly acknowledge ${texts.length > 1 ? 'them' : 'it'}, then continue with the updated task (or stop if the user asked you to).`;
-}
-
-export interface ToolRequest { tool: string; kind: ToolKind; args: any; root: string; mode: Mode }
-export interface GuardDecision { effect?: 'allow' | 'ask' | 'deny'; reason?: string }
 /** The rules and the mode together: run, ask first, refused by a rule, or not allowed in this mode. */
 type Verdict = { effect: 'allow' | 'ask' | 'deny' | 'mode'; reason?: string };
-export interface HookOutcome { blocked: boolean; reason?: string; context?: string[] }
-
-/** Optional safety layer around the agent loop: permission rules, hooks, secret masking and auditing. */
-export interface AgentGuard {
-  /** Turns masked secrets in tool arguments back into real values; throws if the arguments cannot be restored safely. */
-  restoreArgs?(args: any, tool?: string): any;
-  decide?(req: ToolRequest): Promise<GuardDecision> | GuardDecision;
-  beforeTool?(req: ToolRequest, signal: AbortSignal): Promise<HookOutcome>;
-  afterTool?(req: ToolRequest, ok: boolean, result: string, ms: number, signal: AbortSignal): Promise<HookOutcome | void>;
-  onApproval?(req: ToolRequest, outcome: 'asked' | 'allowed' | 'denied'): void;
-  onPrompt?(text: string, signal: AbortSignal): Promise<HookOutcome>;
-  onStop?(signal: AbortSignal): Promise<HookOutcome>;
-}
 
 /** How many times a Stop hook may send the agent back to work in one turn. */
 const MAX_STOP_CONTINUES = 3;
-
-export interface AgentDeps {
-  guard?: AgentGuard;
-  root: string;
-  llm: LlmFn;
-  getConfig: (opts: RunOptions) => Promise<LlmConfig> | LlmConfig;
-  tools: () => Tool[];
-  memory?: () => Promise<string> | string;
-  activeFile?: () => string | undefined;
-  snapshot?: (turn: number, absPath: string) => Promise<void>;
-  /** Roll workspace files back to before `turn`; returns the restored absolute paths. */
-  restore?: (turn: number) => Promise<string[]>;
-  contextLimit?: () => number;
-  compactRatio?: () => number;
-  /** Internal: marks a sub-agent (no further delegation). */
-  subagent?: boolean;
-  /** Runs a sub-agent through the session runtime (tracked, visible, saved). Without it, sub-agents run inline, read-only. */
-  spawn?: (req: SpawnRequest) => Promise<SpawnResult>;
-  /** Sends a follow-up message to an existing sub-agent (send_message tool). */
-  sendToAgent?: (to: string, message: string) => Promise<SpawnResult>;
-  /** Sub-agent types offered to the model (built-ins + .claude/agents definitions). */
-  agentTypes?: () => AgentType[];
-  /** Extra system instructions, e.g. a sub-agent type's prompt. */
-  extraSystem?: string;
-  /** Skills (SKILL.md) the agent may load with the skill tool. */
-  skills?: () => Skill[];
-  /**
-   * The project's own checks (typecheck, lint, tests). When the agent changed files and is about to finish, these run
-   * through run_command (same approvals and rules); failures go back to the model to fix before it may finish.
-   */
-  checks?: () => Promise<CheckCommand[]> | CheckCommand[];
-  /** User overrides of the effort level's limits (0 or missing = use the effort level's value). */
-  limits?: () => { maxIterations?: number; maxTokens?: number };
-  /** Every file change in the workspace, so changes made by shell commands and sub-agents count as changes too. */
-  fileChanges?: FileChangeFeed;
-  /** All workspace folders (multi-root); the first that equals root is the primary one. */
-  roots?: () => WorkspaceRoot[];
-}
 
 /** How many times one turn may recover from a reply cut off at the output-token limit. */
 export const MAX_CUT_OFF_RECOVERIES = 3;
@@ -126,179 +45,10 @@ export const MAX_CUT_OFF_RECOVERIES = 3;
 export const MAX_OVERFLOW_RETRIES = 2;
 const isJson = (s: string): boolean => { try { JSON.parse(s || '{}'); return true; } catch { return false; } };
 
-/** One project check: a shell command run in the workspace root. */
-export interface CheckCommand {
-  name: string; command: string; timeoutSeconds: number;
-  /** Faster form limited to the changed files: {files} = quoted changed paths, {dirs} = their folders as ./dir. */
-  related?: string;
-}
-
-/** Documentation, images and similar: changing only these needs no build or test run. */
-export const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc|png|jpe?g|gif|svg|ico|webp|pdf)$|(^|\/)(LICENSE|CHANGELOG|AUTHORS|CODEOWNERS|NOTICE)(\.[a-z]+)?$/i;
-/** Above this many changed files the related form is no faster than the full run. */
-const MAX_RELATED_FILES = 20;
-
-/**
- * The checks to run for these changed files (workspace-relative, forward slashes): none when only documentation
- * changed; the related (faster) form of a check when it has one and few files changed; the full command otherwise.
- */
-export function scopeChecks(checks: CheckCommand[], changed: string[]): CheckCommand[] {
-  const code = changed.filter((f) => !DOC_FILE.test(f));
-  if (changed.length && !code.length) { return []; }
-  const local = code.filter((f) => !/^([a-z]:)?\//i.test(f));
-  return checks.map((c) => {
-    if (!c.related || !local.length || local.length > MAX_RELATED_FILES || local.length !== code.length) { return c; }
-    const files = local.map((f) => `"${f}"`).join(' ');
-    const goDirs = [...new Set(local.filter((f) => f.endsWith('.go')).map((f) => { const d = path.posix.dirname(f); return d === '.' ? '.' : `./${d}`; }))];
-    if (c.related.includes('{dirs}') && !goDirs.length) { return c; }
-    return { ...c, command: c.related.replace('{files}', files).replace('{dirs}', goDirs.join(' ')) };
-  });
-}
-
-/** How many times failing checks may send the agent back to fix them in one turn. */
-export const MAX_CHECK_ROUNDS = 2;
-const CHECK_OUTPUT_CHARS = 8000;
-
-export function checksPromptSection(checks: CheckCommand[]): string {
-  if (!checks.length) { return ''; }
-  return `# Project checks
-These commands check this project. Run the relevant ones with run_command (pass timeout_seconds) after changing code. They also run automatically when you finish a turn in which you changed files; if one fails you will get its output and must fix the cause.
-${checks.map((c) => `- ${c.name}: \`${c.command}\``).join('\n')}`;
-}
-
-/** Exit code from run_command output ("[exit 0]" on the last line), or undefined when it did not finish normally. */
-export function exitCodeOf(result: string): number | undefined {
-  const m = /\[exit (-?\d+)\]\s*$/.exec(result);
-  return m ? Number(m[1]) : undefined;
-}
-
-const NOT_RUN = /^(DENIED|BLOCKED)/;
-
-/** How a command appears in the verification summary. */
-const checkLabel = (command: string): string => (command.length > 60 ? `${command.slice(0, 57)}...` : command);
-
-export interface SpawnRequest {
-  parentToolId: string; description: string; prompt: string; type: string; background: boolean;
-  settings: RunOptions; signal: AbortSignal;
-  /** The parent's conversation so far (used by the "fork" type). */
-  history: ChatMessage[];
-}
-export interface SpawnResult {
-  ok: boolean; text: string; agentId?: string;
-  /** Absolute paths the sub-agent changed in the parent's workspace (not in a worktree of its own). */
-  changed?: string[];
-}
-
-export { BASE_PROMPT } from './prompts';
-
 /** Tokens one model call consumed: the gateway's own count, or an estimate when it does not report usage. */
 export function tokensSpent(res: Pick<StreamResult, 'usage' | 'content' | 'toolCalls'>, sent: ChatMessage[]): number {
   if (res.usage) { return Math.max(0, (res.usage.prompt || 0) + (res.usage.completion || 0)); }
   return estimateTokens([...sent, { role: 'assistant', content: res.content || null, tool_calls: res.toolCalls?.length ? res.toolCalls : undefined }]);
-}
-
-/** Claude-style delegation tool: launches a sub-agent (foreground or background). */
-export const AGENT_TOOL = 'agent';
-export const TASK_TOOL = AGENT_TOOL;
-export const SEND_TOOL = 'send_message';
-export const DELEGATION_TOOLS = [AGENT_TOOL, SEND_TOOL, 'ask_user_question'];
-
-export function agentToolSpec(types: AgentType[]): ToolSpec {
-  const list = types.map((t) => `- ${t.name}: ${t.description}${t.readOnly ? ' (read-only)' : ''}`).join('\n');
-  return fnSpec(AGENT_TOOL, `Launch a sub-agent to handle a task autonomously in its own context window. Available agent types:
-${list}
-
-How to use it:
-- Sub-agents start with an EMPTY context (except "fork"), so put every detail they need in prompt and say exactly what to return.
-- Launch several agents in one turn (multiple tool calls) to run them in parallel. When the user lists several independent tasks, launch one agent per task in the same response; never give two parallel agents edits to the same files.
-- Set run_in_background to true for long work: the call returns at once and you are notified automatically when the agent finishes. Do not poll, sleep or wait for it; continue with other work or end your turn.
-- An agent's final message is its report and is returned only to you; summarize what matters for the user.
-- Use send_message to give an existing agent follow-up instructions; it keeps its context.
-- Prefer doing small, targeted tasks yourself; delegate broad searches or independent pieces of work.`,
-  {
-    description: { type: 'string', description: 'Short (3-6 word) title of the task.' },
-    prompt: { type: 'string', description: 'The complete task for the agent, including all context it needs and what to report back.' },
-    subagent_type: { type: 'string', enum: types.map((t) => t.name), description: `Agent type (default: ${DEFAULT_AGENT_TYPE}).` },
-    run_in_background: { type: 'boolean', description: 'Run without waiting; you will be notified when it finishes.' },
-  }, ['description', 'prompt']);
-}
-
-export const QUESTION_TOOL = 'ask_user_question';
-export const QUESTION_SPEC: ToolSpec = fnSpec(QUESTION_TOOL,
-  `Ask the user 1-${MAX_QUESTIONS} multiple-choice questions when you are genuinely unsure how to proceed (ambiguous requirements, a choice between approaches, preferences, missing details). The run pauses until the user answers, then continues with the answers as this tool's result.
-- Each question has 2-${MAX_OPTIONS} concise options with a short description of the trade-off. Do NOT add an "Other" option: the user can always pick "Other" and type an answer.
-- Use multiSelect: true when several options can apply at once.
-- If you recommend an option, put it first and end its label with " (Recommended)".
-- Ask everything you need in ONE call instead of several in a row. Do not use this for things you can find out by reading the code.`,
-  {
-    questions: {
-      type: 'array', minItems: 1, maxItems: MAX_QUESTIONS,
-      items: {
-        type: 'object',
-        properties: {
-          question: { type: 'string', description: 'The full question, ending with a question mark.' },
-          header: { type: 'string', description: 'Very short label shown as a chip (max 12 characters), e.g. "Format".' },
-          options: {
-            type: 'array', minItems: 2, maxItems: MAX_OPTIONS,
-            items: { type: 'object', properties: { label: { type: 'string', description: '1-5 words.' }, description: { type: 'string', description: 'What choosing this means.' } }, required: ['label'] },
-          },
-          multiSelect: { type: 'boolean', description: 'Allow selecting several options.' },
-        },
-        required: ['question', 'options'],
-      },
-    },
-  }, ['questions']);
-
-export const TODO_TOOL = 'todo_write';
-export const TODO_SPEC: ToolSpec = fnSpec(TODO_TOOL,
-  `Create or update your task list for the current work; the user sees it as a live checklist. Send the COMPLETE list every time (it replaces the previous one).
-- Use it for tasks with 3 or more steps, and right after a plan is approved (one item per plan step).
-- Exactly one step should be in_progress while you work; mark a step completed immediately when it is done.
-- content is the step in imperative form ("Fix the login bug"); activeForm is the present-continuous form shown while it runs ("Fixing the login bug").
-- At most ${MAX_TODOS} steps. Skip the list for trivial single-step requests.`,
-  {
-    todos: {
-      type: 'array', minItems: 1, maxItems: MAX_TODOS,
-      items: {
-        type: 'object',
-        properties: {
-          content: { type: 'string' },
-          status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
-          activeForm: { type: 'string' },
-        },
-        required: ['content', 'status'],
-      },
-    },
-  }, ['todos']);
-
-export const SEND_SPEC: ToolSpec = fnSpec(SEND_TOOL,
-  'Send a follow-up message to an existing sub-agent (by the agent id returned when it was launched). It continues with its context intact and runs in the background; you are notified when it replies.',
-  { to: { type: 'string', description: 'Agent id, e.g. "a3".' }, message: { type: 'string', description: 'What the agent should do next.' } }, ['to', 'message']);
-
-const SUBAGENT_PROMPT = `\n\nYou are a SUB-AGENT launched by a parent agent to do one task. Work autonomously: you cannot ask the user questions.
-Finish with a concise, factual report: key findings with file:line references, what you changed and how you verified it. Do not include raw dumps of file contents. Your final message is the only thing the parent will see.`;
-
-export const PLAN_TOOL = 'exit_plan_mode';
-export const PLAN_SPEC: ToolSpec = fnSpec(PLAN_TOOL,
-  'Present your finished plan to the user for approval. Call this once research is complete; only available in plan mode. On approval you leave plan mode and can edit files.',
-  { plan: { type: 'string', description: 'The full plan in markdown: numbered steps, files to change, risks, verification.' } }, ['plan']);
-
-const PLAN_PROMPT = `\n\nYou are in PLAN MODE. You may only read and search; you cannot edit files or run commands.
-Research the task thoroughly, then call the exit_plan_mode tool with a concrete plan for the user to approve: numbered steps, the files you will change, risks, and how you will verify the result. Do not write the plan only as chat text and do not start implementing until the plan is approved.`;
-
-export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memory: string, activeFile?: string, subagent = false, extra = '', checks = '', roots?: WorkspaceRoot[]): string {
-  const hint = effortParams(effort).hint;
-  return [
-    BASE_PROMPT,
-    mode === 'plan' ? PLAN_PROMPT : '',
-    subagent ? SUBAGENT_PROMPT : `\n\n${FANOUT_PROMPT}`,
-    extra ? `\n\n${extra}` : '',
-    hint ? `\n\nEffort guidance: ${hint}` : '',
-    `\n\n${environmentSection(root, { platform: process.platform, ...(roots && roots.length > 1 ? { roots } : {}) })}`,
-    checks ? `\n\n${checks}` : '',
-    activeFile ? `\nActive file: ${activeFile}` : '',
-    memory ? `\n\n# Project instructions\n${memory}` : '',
-  ].join('');
 }
 
 export class Agent {

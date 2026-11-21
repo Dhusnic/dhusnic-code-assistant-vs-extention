@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+
+  test:
+    name: Unit tests (${{ matrix.os }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        # Most users are on Windows (PowerShell, OCR, path handling); Linux covers the remote/SSH side.
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Slow tests (serial)
+        run: node --test --test-concurrency=1 "out/test/slow/*.test.js"
+
+  package:
+    name: Package .vsix
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # vscode:prepublish type-checks and builds the production bundle.
+      - run: npx vsce package --allow-missing-repository --skip-license -o infraon-code-assistant.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: infraon-code-assistant.vsix
+          retention-days: 14
+
+# Not run here:
+#  - `npm run test:e2e` drives a real VS Code window (needs a desktop session).
+#  - `npm run eval` calls the company LLM gateway, which is only reachable inside the network.
+#  - Signing and publishing updates (scripts/sign-update.js, deploy.ps1) need the private signing key.
+# Run these on a self-hosted runner inside the network; see CONTRIBUTING.md.

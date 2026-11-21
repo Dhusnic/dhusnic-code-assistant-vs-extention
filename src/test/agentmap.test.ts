@@ -163,7 +163,6 @@ test('a corrupt or missing stats block loads as zero instead of failing', async 
 
 const ROOT = fs.existsSync(path.join(__dirname, '..', '..', 'media', 'session.js')) ? path.join(__dirname, '..', '..') : process.cwd();
 const JS = fs.readFileSync(path.join(ROOT, 'media', 'session.js'), 'utf8');
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { esc } = require(path.join(ROOT, 'media', 'md.js'));
 
 function loadMap(agents: any[], focused = 'a1') {

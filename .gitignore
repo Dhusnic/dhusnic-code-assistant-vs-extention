@@ -1,6 +1,5 @@
 # Dependencies
 node_modules
-package-lock.json
 
 # Build output
 out
@@ -56,3 +55,9 @@ eval-results/
 
 # Update-signing keys must never be committed
 *.pem
+
+# Installer zips: built by scripts/build-installers.js and served from the gateway (server/updates), not stored in git
+*.zip
+
+# Test coverage output
+coverage/

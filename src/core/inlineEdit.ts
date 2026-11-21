@@ -43,13 +43,35 @@ export function buildInlineEditMessages(req: InlineEditRequest): ChatMessage[] {
   ];
 }
 
+/** A fence longer than any run of backticks inside the code, so the code can never close it early. */
+const fenceFor = (code: string): string => '`'.repeat(Math.max(3, ...(code.match(/`{3,}/g) ?? []).map((m) => m.length + 1)));
+
 /** The first message of a session that fixes one diagnostic. `line` is 1-based. */
 export function buildFixPrompt(diag: DiagnosticInfo, file: string, line: number, code: string): string {
   const tag = [diag.source, diag.code].filter((x) => x !== undefined && x !== '').join(' ');
   const kind = diag.severity ?? 'problem';
-  const ticks = '`'.repeat(Math.max(3, ...(code.match(/`{3,}/g) ?? []).map((m) => m.length + 1)));
+  const ticks = fenceFor(code);
   return `Fix this ${kind} in ${file} at line ${line}${tag ? ` (${tag})` : ''}:\n\n${diag.message}\n\n${ticks}\n${code}\n${ticks}\n\nFind the root cause, make the smallest correct change, and verify it.`;
 }
+
+/**
+ * The first message of a "Generate Tests" session. Tests belong in other files and must fit the project's framework
+ * and layout, so this goes to an agent that can look around and run them, not to an inline edit. Lines are 1-based.
+ */
+export function buildTestsPrompt(file: string, startLine: number, endLine: number, code: string, language: string): string {
+  const ticks = fenceFor(code);
+  const where = startLine === endLine ? `line ${startLine}` : `lines ${startLine}-${endLine}`;
+  return `Write unit tests for this code in ${file} (${where}):\n\n${ticks}${language}\n${code}\n${ticks}\n\n`
+    + 'First find out how this project tests code: the framework, where test files live, how they are named, and the helpers or fixtures they share. '
+    + 'Follow those conventions; add a test framework only if the project has none, and say so. '
+    + 'Cover the normal behaviour, edge cases and error handling. Do not change the code under test unless a test exposes a real bug: then stop and report it. '
+    + 'Run the new tests and make sure they pass.';
+}
+
+/** Inline-edit instruction for "Add Documentation": comments only, reviewed as a diff like any inline edit. */
+export const DOCUMENT_INSTRUCTION = 'Add documentation comments in the idiomatic style for this language (JSDoc, docstrings, XML doc comments, ...) to the '
+  + 'functions, classes and non-obvious logic in the selection. Explain intent, parameters, return values and errors; do not restate the code. '
+  + 'Keep the existing comments that are still correct. Do not change any code.';
 
 const THINK = /^\s*<(think|thinking|reasoning|reflection)\b[^>]*>[\s\S]*?<\/\1>[ \t]*\n?/i;
 const OPEN_THINK = /^\s*<(?:think|thinking|reasoning|reflection)\b[^>]*>/i;
