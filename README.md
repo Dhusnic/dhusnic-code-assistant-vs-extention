@@ -29,7 +29,7 @@ Then run **Infraon Assistant: Set API Key** and open the Infraon Assistant view 
 
 ## Development
 
-Requires Node.js 20+ and VS Code 1.90+.
+Requires Node.js 24 (the test scripts use `node --test` file globs, which Node 20 does not support) and VS Code 1.90+.
 
 ```
 npm ci
