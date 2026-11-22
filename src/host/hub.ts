@@ -37,6 +37,7 @@ import { createNotifier } from './features/notifications';
 import type { Scheduler } from './features/scheduler';
 import { createTerminalRunner } from './features/terminalRunner';
 import { WebService } from './features/web';
+import { TestingService } from './features/testing';
 
 export const PANEL_TYPE = 'infraonAssistant.session';
 const OTHER_WORKSPACE = 'That session belongs to another workspace. Open it from the VS Code window of that folder.';
@@ -77,6 +78,7 @@ export class Hub {
   readonly safety: SafetyCenter;
   readonly remote: RemoteService;
   readonly web: WebService;
+  readonly testing: TestingService;
   private terminal = createTerminalRunner();
   private memoryCache = new MemoryCache();
   private notifier: ReturnType<typeof createNotifier>;
@@ -105,6 +107,12 @@ export class Hub {
     });
     this.safety.web = { policy: () => this.web.policy(), approved: (sid) => this.web.approved(sid) };
     ctx.subscriptions.push(this.web);
+    this.testing = new TestingService({
+      ctx, output: this.output, get cfg() { return hub.cfg; },
+      addKnownSecret: (v, k) => this.safety.addKnownSecret(v, k),
+      vision: () => (this.web.visionModel() ? (dataUrl, q, signal) => this.web.describeImage(dataUrl, q, signal) : undefined),
+    });
+    this.safety.testing = { currentUrl: (sid) => this.testing.currentUrl(sid) };
     this.policyReady = loadPolicy({ url: this.cfg.get<string>('policyUrl', '') || undefined, cacheFile: path.join(ctx.globalStorageUri.fsPath, 'policy-cache.json') }).then((r) => {
       this.policy = r.policy;
       for (const e of r.errors) { this.output.appendLine(`[policy] ${e}`); }
@@ -298,7 +306,8 @@ export class Hub {
   }
 
   /** Every tool an agent of session `sid` can use (web tools keep their sources and approvals per session). */
-  private allTools(sid = '_shared') { return [...this.fsTools, ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.mcp.tools()]; }
+  /** browserKey: whose test browser the testing tools drive (each sub-agent gets its own, so parallel testers do not collide). */
+  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
 
   checkpointsFor(sid: string, aid: string): CheckpointStore { return new CheckpointStore(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid, aid)); }
 
@@ -418,7 +427,7 @@ export class Hub {
       guard: this.safety.guardFor(sid, aid, root, !!sub),
       llm: this.llmFor(sid),
       getConfig: (o) => this.llmConfig(o.model),
-      tools: () => (sub ? toolsForType(this.allTools(sid), sub, DELEGATION_TOOLS) : this.allTools(sid)),
+      tools: () => (sub ? toolsForType(this.allTools(sid, `${sid}#${aid}`), sub, DELEGATION_TOOLS) : this.allTools(sid)),
       memory: () => this.loadMemory(),
       checks: sub ? undefined : () => this.projectChecks(root),
       // An agent in its own worktree works outside the workspace: workspace changes and folders are not its own.
@@ -659,6 +668,7 @@ export class Hub {
     await this.manager.deleteSession(sid);
     await fs.rm(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid), { recursive: true, force: true });
     this.safety.forget(sid);
+    await this.testing.closeSession(sid);
     this.storedCache = undefined;
     this.scheduleRefresh();
   }

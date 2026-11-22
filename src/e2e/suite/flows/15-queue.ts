@@ -1,6 +1,15 @@
 import * as assert from 'node:assert/strict';
 import { callTool, lastOfRole, reply, waitFor } from '../harness';
-import { Flow } from '../types';
+import { Flow, FlowContext } from '../types';
+
+/**
+ * Waits until the model call is really in flight. The Stop button shows as soon as the agent is busy, but a message
+ * sent before its first model call is folded into that call (by design), so it is never queued: a test that sends a
+ * follow-up must wait for the request to reach the gateway, or it races the agent.
+ */
+async function modelCallInFlight(t: FlowContext, count = 1): Promise<void> {
+  await waitFor(`chat request ${count} to reach the gateway`, async () => ((await t.gw.requests()).length >= count ? true : undefined));
+}
 
 export const flows: Flow[] = [
   {
@@ -10,6 +19,7 @@ export const flows: Flow[] = [
       await t.gw.script(callTool('list_dir', { path: '.' }, { gate: { name: 'work' } }), reply('Handled both requests.'));
       await s.send('Start the task');
       await s.waitFor('#stop', { visible: true });
+      await modelCallInFlight(t);
 
       await s.send('Also check the README');
       await s.waitFor('#queued .q-item .q-text', { text: 'Also check the README', visible: true });
@@ -37,6 +47,7 @@ export const flows: Flow[] = [
       await t.gw.script(reply('Working on it for a long time', { gate: { name: 'never', afterChars: 7 } }));
       await s.send('Long task');
       await s.waitFor('#stop', { visible: true });
+      await modelCallInFlight(t);
       await s.send('Change of plan');
       await s.waitFor('#queued .q-item', { count: 1 });
       await s.click('#stop');
@@ -52,6 +63,7 @@ export const flows: Flow[] = [
       await t.gw.script(reply('Busy for a while', { gate: { name: 'never', afterChars: 4 } }));
       await s.send('Busy task');
       await s.waitFor('#stop', { visible: true });
+      await modelCallInFlight(t);
       await s.send('First follow-up');
       await s.send('Second follow-up');
       await s.waitFor('#queued .q-item', { count: 2 });

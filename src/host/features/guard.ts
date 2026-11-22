@@ -14,6 +14,8 @@ import { catastrophicReason, isReadOnlyCommand } from '../../core/remoteTools';
 import { SecretVault, redactMessages } from '../../core/redact';
 import { WebPolicy, outboundProblem, siteOf, webDecision } from '../../core/web/policy';
 import { NETWORK_TOOLS, URL_TOOLS, normalizeInputUrl } from '../../core/web/tools';
+import { secretTargetProblem, testTargetDenial } from '../../core/testing/targets';
+import { TEST_NETWORK_TOOLS } from '../../core/testing/tools';
 
 const TRUST_KEY = 'trustedProjectSettings';
 const RECHECK_MS = 2000;
@@ -48,6 +50,8 @@ export class SafetyCenter {
   errors: string[] = [];
   /** Set by the hub: the effective web policy, and the sites the user approved per session. */
   web?: { policy(): WebPolicy; approved(sid: string): Set<string> };
+  /** Set by the hub: the page the session's test browser is on. */
+  testing?: { currentUrl(sid: string): string | undefined };
 
   constructor(private host: GuardHost) {}
 
@@ -182,6 +186,8 @@ export class SafetyCenter {
     if (req.tool === 'remote_exec' && d.effect === undefined && req.mode === 'auto-edit' && isReadOnlyCommand(req.args?.command)) { return { effect: 'allow', reason: 'read-only command' }; }
     const web = this.webDecide(req, sid, d.effect);
     if (web) { return web; }
+    const test = this.testDecide(req);
+    if (test) { return test; }
     const target = String(req.args?.path ?? '');
     if ((req.kind === 'edit' && PROTECTED.test(target)) || (req.kind === 'exec' && PROTECTED_IN_COMMAND.test(String(req.args?.command ?? '')))) {
       return { effect: 'ask', reason: 'agent permission settings are protected' };
@@ -213,6 +219,13 @@ export class SafetyCenter {
     return req.tool === 'web_download' ? undefined : { effect: 'allow', reason: w.reason };
   }
 
+  private testDecide(req: ToolRequest): GuardDecision | undefined {
+    if (!TEST_NETWORK_TOOLS.has(req.tool) || !this.web) { return undefined; }
+    const p = this.web.policy();
+    const reason = testTargetDenial(req.tool, req.args, p, (url) => webDecision(url, p, { mode: req.mode }));
+    return reason ? { effect: 'deny', reason } : undefined;
+  }
+
   guardFor(sid: string, aid: string, root: string, isSub: boolean): AgentGuard {
     const ids = { session_id: sid, agent_id: aid };
     return {
@@ -225,6 +238,11 @@ export class SafetyCenter {
           throw new Error('Refused: these arguments contain a secret (shown to you as ‹secret:…›). Secrets are never sent to websites or search engines.');
         }
         if (tool && NETWORK_TOOLS.has(tool) && vault.hasUnknownPlaceholder(JSON.stringify(args))) { throw new Error('Refused: these arguments contain a masked secret.'); }
+        // Testing a local or intranet app may need a real token or password; an internet host never gets one.
+        if (tool && TEST_NETWORK_TOOLS.has(tool) && JSON.stringify(restored) !== JSON.stringify(args)) {
+          const problem = secretTargetProblem(tool, args, this.testing?.currentUrl(isSub ? `${sid}#${aid}` : sid), this.web?.policy().allowPrivateHosts ?? []);
+          if (problem) { throw new Error(problem); }
+        }
         return restored;
       },
       decide: (req) => this.decide(req, sid, aid),

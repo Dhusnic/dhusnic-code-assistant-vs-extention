@@ -108,6 +108,10 @@
             {
                 "command": "infraonAssistant.clearWebCache",
                 "title": "Infraon Assistant: Clear Web Cache and Offline Library"
+            },
+            {
+                "command": "infraonAssistant.setDatabasePassword",
+                "title": "Infraon Assistant: Set Test Database Password"
             }
         ],
         "menus": {
@@ -536,6 +540,97 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Ask before a remote command that could wreck a server (reboot or power off, formatting or repartitioning a disk, overwriting a disk with dd, recursively deleting or changing permissions of system folders), even in Auto-execute. Everything else runs without asking in Auto-execute."
+                },
+                "infraonAssistant.testing.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Give the agents testing tools: a real browser (Chrome/Edge) to open and drive web apps and catch load failures, JavaScript errors and failed API calls; failure simulation; API tests; data comparison; and read-only database queries."
+                },
+                "infraonAssistant.testing.browserPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Chrome, Edge or Chromium executable for browser tests. Empty: the installed Chrome or Edge is found automatically."
+                },
+                "infraonAssistant.testing.headless": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run the test browser without a window. Turn off to watch the agent use the browser."
+                },
+                "infraonAssistant.testing.timeoutSeconds": {
+                    "type": "number",
+                    "default": 30,
+                    "minimum": 1,
+                    "maximum": 600,
+                    "description": "Default timeout for page loads and API test requests."
+                },
+                "infraonAssistant.testing.slowRequestMs": {
+                    "type": "number",
+                    "default": 3000,
+                    "minimum": 100,
+                    "description": "Requests slower than this are reported as slow."
+                },
+                "infraonAssistant.testing.ignoreHttpsErrors": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Accept invalid or self-signed TLS certificates in browser and API tests (internal test servers only)."
+                },
+                "infraonAssistant.testing.browserIdleMinutes": {
+                    "type": "number",
+                    "default": 10,
+                    "minimum": 1,
+                    "description": "Close a test browser after it has not been used for this many minutes."
+                },
+                "infraonAssistant.testing.reportsFolder": {
+                    "type": "string",
+                    "default": "test-reports",
+                    "description": "Workspace folder for /qa test reports and screenshots."
+                },
+                "infraonAssistant.testing.databases": {
+                    "type": "array",
+                    "default": [],
+                    "markdownDescription": "Databases the agents may query **read-only** (for data checks). Each: `name`, `type` (`postgres`, `mysql`, `sqlite`, `sqlserver`), `host`, `port`, `database`, `user` (or `file` for SQLite), optional `cli` (path to psql/mysql/sqlite3/sqlcmd) and `description`. Set passwords with **Infraon Assistant: Set Test Database Password** (stored encrypted). Use a read-only database user.",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "name",
+                            "type"
+                        ],
+                        "properties": {
+                            "name": {
+                                "type": "string"
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "postgres",
+                                    "mysql",
+                                    "sqlite",
+                                    "sqlserver"
+                                ]
+                            },
+                            "host": {
+                                "type": "string"
+                            },
+                            "port": {
+                                "type": "number"
+                            },
+                            "database": {
+                                "type": "string"
+                            },
+                            "user": {
+                                "type": "string"
+                            },
+                            "file": {
+                                "type": "string"
+                            },
+                            "cli": {
+                                "type": "string"
+                            },
+                            "description": {
+                                "type": "string"
+                            }
+                        }
+                    }
                 }
             }
         },
