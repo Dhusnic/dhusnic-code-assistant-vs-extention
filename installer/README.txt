@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.26.0 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.27.0 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -22,9 +22,19 @@ What the installer does
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
 
-New in 0.26.0: automatic updates
-- This is the last update you install by hand. From now on, new versions are published on the Infraon
-  gateway server and the assistant installs them by itself (checked at start-up and every 4 hours).
+New in 0.27.0: testing toolkit and code tools
+- The agent can test your web apps in your installed Chrome or Edge: it opens pages, clicks and types,
+  and reports pages that fail to load, JavaScript errors, failed API calls and broken images.
+- It can simulate failures (API errors, slow or offline network), test APIs, compare what the page
+  shows with the API, the database or an expected-data file, and run read-only database queries.
+- Type /qa <url or feature> for a full QA pass with a report saved in test-reports/.
+- Database passwords: Ctrl+Shift+P -> "Infraon Assistant: Set Test Database Password".
+- Also new: Generate Tests and Add Documentation for the selected code, a commit-message button in
+  Source Control, and search_code (find code by what it does).
+
+Automatic updates (since 0.26.0)
+- New versions are published on the Infraon gateway server and the assistant installs them by itself
+  (checked at start-up and every 4 hours).
   When one is installed you are asked to reload the window; it never interrupts a running agent.
 - Check right away: Ctrl+Shift+P -> "Infraon Assistant: Check for Updates".
 - Every update is signed and verified before it is installed. Prefer to be asked first? Set

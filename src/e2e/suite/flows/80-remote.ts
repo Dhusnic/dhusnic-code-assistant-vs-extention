@@ -7,7 +7,6 @@ const SERVER = 'local-e2e';
 const PASSWORD = 'pw-e2e-Secret-9431';
 
 // The test SSH server is compiled with the unit tests; the UI suite reuses it.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { startSshServer, findShell } = require(path.join(__dirname, '..', '..', '..', 'test', 'fixtures', 'sshServer')) as typeof import('../../../test/fixtures/sshServer');
 
 export const flows: Flow[] = [

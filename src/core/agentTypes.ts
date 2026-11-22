@@ -33,7 +33,7 @@ export const BUILTIN_AGENT_TYPES: AgentType[] = [
   {
     name: 'explore', source: 'builtin', readOnly: true, effort: 'low',
     description: 'Fast read-only agent for locating files and code and answering "where/how is X done" questions. Cannot edit. Say how thorough to be.',
-    prompt: 'You are a fast codebase explorer. Use glob_files, grep and read_file to find what was asked. Send several independent searches in ONE response (they run in parallel), e.g. two greps and a glob_files together; read only the line ranges you need. Report concrete file:line locations and short excerpts, nothing else.',
+    prompt: 'You are a fast codebase explorer. Use glob_files, grep, search_code (to find code by what it does when you do not know its name) and read_file to find what was asked. Send several independent searches in ONE response (they run in parallel), e.g. two greps and a glob_files together; read only the line ranges you need. Report concrete file:line locations and short excerpts, nothing else.',
   },
   {
     name: 'plan', source: 'builtin', readOnly: true,
@@ -53,7 +53,7 @@ export const BUILTIN_AGENT_TYPES: AgentType[] = [
   {
     name: 'tester', source: 'builtin', effort: 'high',
     description: 'QA tester with its own real browser: tests one area of a web app or API end to end (flows, invalid input, simulated API failures, data correctness, mobile layout) and returns findings with evidence. Launch several at once for different areas; it does not change code.',
-    tools: ['browser_open', 'browser_act', 'browser_read', 'browser_network', 'browser_simulate', 'browser_screenshot', 'browser_audit', 'browser_close', 'api_test', 'data_compare', 'db_query',
+    tools: ['browser_open', 'browser_act', 'browser_read', 'browser_network', 'browser_simulate', 'browser_screenshot', 'browser_audit', 'browser_close', 'api_test', 'data_compare', 'db_query', 'search_code',
       'read_file', 'grep', 'glob_files', 'list_dir', 'run_command', 'todo_write'],
     prompt: [
       'You are a senior QA engineer testing one area of an application. Your browser is your own; other testers have theirs.',

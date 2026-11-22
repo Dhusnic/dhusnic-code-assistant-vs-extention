@@ -2,7 +2,7 @@
     "name": "infraon-code-assistant",
     "displayName": "Infraon Code Assistant",
     "description": "Agentic AI coding assistant powered by the company-hosted LLM",
-    "version": "0.26.0",
+    "version": "0.27.0",
     "publisher": "infraon",
     "engines": {
         "vscode": "^1.90.0"
@@ -11,7 +11,10 @@
         "AI",
         "Chat"
     ],
-    "main": "./out/host/extension.js",
+    "main": "./dist/extension.js",
+    "extensionKind": [
+        "workspace"
+    ],
     "activationEvents": [
         "onStartupFinished",
         "onWebviewPanel:infraonAssistant.session"
@@ -112,6 +115,19 @@
             {
                 "command": "infraonAssistant.setDatabasePassword",
                 "title": "Infraon Assistant: Set Test Database Password"
+            },
+            {
+                "command": "infraonAssistant.documentSelection",
+                "title": "Infraon Assistant: Add Documentation to Selection"
+            },
+            {
+                "command": "infraonAssistant.generateTests",
+                "title": "Infraon Assistant: Generate Tests for Selection"
+            },
+            {
+                "command": "infraonAssistant.generateCommitMessage",
+                "title": "Infraon Assistant: Generate Commit Message",
+                "icon": "$(sparkle)"
             }
         ],
         "menus": {
@@ -125,6 +141,16 @@
                     "command": "infraonAssistant.fixSelection",
                     "when": "editorHasSelection",
                     "group": "infraon@2"
+                },
+                {
+                    "command": "infraonAssistant.documentSelection",
+                    "when": "editorHasSelection",
+                    "group": "infraon@3"
+                },
+                {
+                    "command": "infraonAssistant.generateTests",
+                    "when": "editorHasSelection",
+                    "group": "infraon@4"
                 }
             ],
             "view/title": [
@@ -154,486 +180,621 @@
                 {
                     "command": "infraonAssistant.fixInSession",
                     "when": "false"
+                },
+                {
+                    "command": "infraonAssistant.documentSelection",
+                    "when": "editorHasSelection"
+                },
+                {
+                    "command": "infraonAssistant.generateTests",
+                    "when": "editorHasSelection"
+                }
+            ],
+            "scm/title": [
+                {
+                    "command": "infraonAssistant.generateCommitMessage",
+                    "when": "scmProvider == git",
+                    "group": "navigation"
                 }
             ]
         },
-        "configuration": {
-            "title": "Infraon Assistant",
-            "properties": {
-                "infraonAssistant.baseUrl": {
-                    "type": "string",
-                    "default": "https://172.16.48.75:30400/v1",
-                    "description": "OpenAI-compatible base URL of the company LLM."
-                },
-                "infraonAssistant.model": {
-                    "type": "string",
-                    "default": "qwen3-coder-next",
-                    "description": "Model name served by the LLM gateway."
-                },
-                "infraonAssistant.allowSelfSignedTls": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Accept the internal gateway's self-signed TLS certificate."
-                },
-                "infraonAssistant.maxIterations": {
-                    "type": "number",
-                    "default": 1200,
-                    "description": "Max tool-call rounds per request (default 1200, enough to build a mid-size project in one go). 0 uses the effort level's value instead (low 15, medium 50, high 80, max 120)."
-                },
-                "infraonAssistant.maxOutputTokens": {
-                    "type": "number",
-                    "default": 0,
-                    "description": "Max tokens the model may write in one reply. 0 uses the effort level's value (low 4096, medium 8192, high and max 16384). Lower it if the LLM server rejects requests for asking too many tokens."
-                },
-                "infraonAssistant.llmIdleTimeoutSeconds": {
-                    "type": "number",
-                    "default": 180,
-                    "description": "End an LLM request when the gateway sends nothing for this many seconds (including the wait for the first token, which is long for very large prompts). It is retried automatically when nothing was shown yet. 0 uses the default (180)."
-                },
-                "infraonAssistant.autoApprove": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Skip approval prompts for file edits and commands (not recommended)."
-                },
-                "infraonAssistant.temperature": {
-                    "type": "number",
-                    "default": 0.2
-                },
-                "infraonAssistant.contextWindow": {
-                    "type": "number",
-                    "default": 262144,
-                    "description": "Context window of the model in tokens. When you do not set it, the extension asks the LLM gateway (vLLM reports max_model_len) and uses that; this value is the fallback when the gateway does not report one. If a request is still rejected as too long, the agent learns the real limit from the error, compacts and retries."
-                },
-                "infraonAssistant.autoCompactThreshold": {
-                    "type": "number",
-                    "default": 0.75,
-                    "minimum": 0.3,
-                    "maximum": 0.95,
-                    "description": "Fraction of the context window at which old conversation is trimmed/summarized automatically."
-                },
-                "infraonAssistant.mcpServers": {
-                    "type": "object",
-                    "default": {},
-                    "markdownDescription": "MCP (Model Context Protocol) servers started over stdio. Example: `{ \"docs\": { \"command\": \"npx\", \"args\": [\"-y\", \"some-mcp-server\"], \"env\": { \"TOKEN\": \"...\" } } }`. A workspace `.mcp.json` file is also supported and asks for approval first."
-                },
-                "infraonAssistant.inlineCompletions.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Show AI ghost-text suggestions while typing (sent only to the company LLM)."
-                },
-                "infraonAssistant.inlineCompletions.debounceMs": {
-                    "type": "number",
-                    "default": 450,
-                    "minimum": 100,
-                    "description": "Wait this long after you stop typing before requesting a suggestion."
-                },
-                "infraonAssistant.inlineCompletions.maxTokens": {
-                    "type": "number",
-                    "default": 128,
-                    "minimum": 16,
-                    "maximum": 512,
-                    "description": "Maximum length of a suggestion."
-                },
-                "infraonAssistant.inlineCompletions.model": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Model for completions. Empty = use the model selected in the chat."
-                },
-                "infraonAssistant.ripgrepPath": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Optional path to a ripgrep (rg) binary used for fast code search. Empty = use VS Code's bundled copy, then rg on PATH, then a built-in fallback."
-                },
-                "infraonAssistant.searchEngine": {
-                    "type": "string",
-                    "enum": [
-                        "auto",
-                        "ripgrep",
-                        "builtin"
-                    ],
-                    "default": "auto",
-                    "enumDescriptions": [
-                        "Use the indexed built-in engine when the file index is ready (best on large repos), otherwise ripgrep.",
-                        "Always use ripgrep.",
-                        "Always use the built-in indexed engine (parallel, .gitignore-aware, source-first)."
-                    ],
-                    "description": "Engine used by the code-search tool."
-                },
-                "infraonAssistant.maxConcurrentAgents": {
-                    "type": "number",
-                    "default": 4,
-                    "minimum": 1,
-                    "maximum": 32,
-                    "description": "How many agents (across all sessions) may talk to the LLM at the same time. Extra agents wait in a queue."
-                },
-                "infraonAssistant.notifications.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Show a VS Code notification when a session needs you or finishes."
-                },
-                "infraonAssistant.notifications.minDurationSeconds": {
-                    "type": "number",
-                    "default": 30,
-                    "minimum": 0,
-                    "description": "Only announce finished tasks that ran at least this long."
-                },
-                "infraonAssistant.notifications.taskDone": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Notify when a long task finishes."
-                },
-                "infraonAssistant.notifications.needsInput": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Notify when an approval or question is waiting."
-                },
-                "infraonAssistant.notifications.backgroundAgents": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Notify when a background agent finishes."
-                },
-                "infraonAssistant.notifications.errors": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Notify when an agent stops with an error."
-                },
-                "infraonAssistant.redactSecrets": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Mask keys, tokens and passwords before text is sent to the LLM. Real values stay on this machine."
-                },
-                "infraonAssistant.auditLog": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Keep a local log of every command, edit and approval per session."
-                },
-                "infraonAssistant.agentWorktrees": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Run each editing sub-agent in its own git worktree and branch, then merge from the Changes panel."
-                },
-                "infraonAssistant.visibleTerminal": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Let the agent run commands and dev servers in a VS Code terminal you can watch."
-                },
-                "infraonAssistant.modelRouting": {
-                    "type": "object",
-                    "default": {},
-                    "properties": {
-                        "subagent": {
-                            "type": "string"
-                        },
-                        "completion": {
-                            "type": "string"
-                        },
-                        "summary": {
-                            "type": "string"
-                        },
-                        "commit": {
-                            "type": "string"
-                        }
+        "configuration": [
+            {
+                "id": "infraonAssistant.model-gateway",
+                "title": "Model and Gateway",
+                "order": 0,
+                "properties": {
+                    "infraonAssistant.baseUrl": {
+                        "type": "string",
+                        "default": "https://172.16.48.75:30400/v1",
+                        "description": "OpenAI-compatible base URL of the company LLM.",
+                        "order": 0
                     },
-                    "additionalProperties": false,
-                    "description": "Use specific models for smaller jobs. Anything left empty uses the model selected in the chat."
-                },
-                "infraonAssistant.teamSkills": {
-                    "type": "array",
-                    "default": [],
-                    "items": {
-                        "type": [
-                            "string",
-                            "object"
-                        ]
+                    "infraonAssistant.model": {
+                        "type": "string",
+                        "default": "qwen3-coder-next",
+                        "description": "Model name served by the LLM gateway.",
+                        "order": 1
                     },
-                    "markdownDescription": "Shared skill libraries: folders or git URLs that everyone on the team receives automatically."
-                },
-                "infraonAssistant.policyUrl": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Optional URL of the central policy file. A policy installed on the machine takes priority."
-                },
-                "infraonAssistant.autoUpdate": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Install new versions published on the company server automatically (you are asked to reload the window). When off, new versions are announced and installed only when you click Install. Read from user settings only."
-                },
-                "infraonAssistant.updateUrl": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Optional URL of the update manifest. Empty: https://<gateway host>/infraon-assistant/updates/latest.json, taken from the base URL."
-                },
-                "infraonAssistant.autoVerify": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "After the agent changes files, run the project's checks (typecheck, lint, tests) before it finishes, and send failures back to it to fix (up to 2 times). Commands come from Verify Commands, else a '## Verify' section in INFRAON.md / CLAUDE.md / AGENTS.md, else are detected from package.json, pyproject.toml, go.mod, Cargo.toml, pom.xml or Gradle. Checks follow the session's approval mode."
-                },
-                "infraonAssistant.verifyCommands": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+                    "infraonAssistant.allowSelfSignedTls": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Accept the internal gateway's self-signed TLS certificate.",
+                        "order": 2
                     },
-                    "default": [],
-                    "description": "Commands that check this project after code changes, run in order (for example `npm run lint`, `npm test`). Overrides detection. Leave empty to detect them."
-                },
-                "infraonAssistant.web.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Let the agents search the web and read pages, PDFs, documents and images from the internet. Your organization policy can turn this off."
-                },
-                "infraonAssistant.web.approval": {
-                    "type": "string",
-                    "enum": [
-                        "new-domains",
-                        "always",
-                        "never"
-                    ],
-                    "default": "new-domains",
-                    "enumDescriptions": [
-                        "Ask the first time a session contacts a site that is not in Allowed Domains (Auto-execute does not ask).",
-                        "Ask before every page the agent fetches or downloads.",
-                        "Never ask (blocked domains and secrets are still refused)."
-                    ],
-                    "description": "When the agent needs your approval to contact a website. Search and research APIs (arXiv, GitHub, package registries…) never ask."
-                },
-                "infraonAssistant.web.allowedDomains": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+                    "infraonAssistant.maxOutputTokens": {
+                        "type": "number",
+                        "default": 0,
+                        "description": "Max tokens the model may write in one reply. 0 uses the effort level's value (low 4096, medium 8192, high and max 16384). Lower it if the LLM server rejects requests for asking too many tokens.",
+                        "order": 3
                     },
-                    "markdownDescription": "Sites fetched without asking. Exact host or `*.example.com`. When not set, a built-in list of documentation, standards and research sites is used (github.com, developer.mozilla.org, docs.python.org, arxiv.org, stackoverflow.com, …)."
-                },
-                "infraonAssistant.web.askDomains": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+                    "infraonAssistant.llmIdleTimeoutSeconds": {
+                        "type": "number",
+                        "default": 180,
+                        "description": "End an LLM request when the gateway sends nothing for this many seconds (including the wait for the first token, which is long for very large prompts). It is retried automatically when nothing was shown yet. 0 uses the default (180).",
+                        "order": 4
                     },
-                    "default": [],
-                    "description": "Sites that always need approval, even in Auto-execute or after an earlier approval."
-                },
-                "infraonAssistant.web.blockedDomains": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+                    "infraonAssistant.temperature": {
+                        "type": "number",
+                        "default": 0.2,
+                        "order": 5
                     },
-                    "default": [],
-                    "description": "Sites that are never contacted."
-                },
-                "infraonAssistant.web.allowPrivateHosts": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+                    "infraonAssistant.contextWindow": {
+                        "type": "number",
+                        "default": 262144,
+                        "description": "Context window of the model in tokens. When you do not set it, the extension asks the LLM gateway (vLLM reports max_model_len) and uses that; this value is the fallback when the gateway does not report one. If a request is still rejected as too long, the agent learns the real limit from the error, compacts and retries.",
+                        "order": 6
                     },
-                    "default": [],
-                    "markdownDescription": "Intranet hosts the agent may read although they have private IP addresses (internal wiki, docs portal). Everything else on private networks, localhost and cloud metadata addresses is always blocked."
-                },
-                "infraonAssistant.web.blockedQueryPatterns": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+                    "infraonAssistant.autoCompactThreshold": {
+                        "type": "number",
+                        "default": 0.75,
+                        "minimum": 0.3,
+                        "maximum": 0.95,
+                        "description": "Fraction of the context window at which old conversation is trimmed/summarized automatically.",
+                        "order": 7
                     },
-                    "default": [],
-                    "description": "Regular expressions. A URL or search query that matches one is never sent (internal project code names, customer names). Secrets are always blocked."
-                },
-                "infraonAssistant.web.search.provider": {
-                    "type": "string",
-                    "enum": [
-                        "auto",
-                        "searxng",
-                        "brave",
-                        "tavily",
-                        "bing",
-                        "google",
-                        "duckduckgo"
-                    ],
-                    "default": "auto",
-                    "enumDescriptions": [
-                        "The first configured provider (SearXNG URL or an API key), else DuckDuckGo.",
-                        "A self-hosted SearXNG instance (set Search: Searxng Url). Private: queries stay on your network.",
-                        "Brave Search API (key).",
-                        "Tavily, built for AI research (key).",
-                        "Bing Web Search (key).",
-                        "Google Programmable Search (key + Search: Google Cx).",
-                        "DuckDuckGo without a key (best effort; may be rate-limited)."
-                    ],
-                    "markdownDescription": "Web search provider. Set API keys with **Infraon Assistant: Set Web Search API Key or GitHub Token** (they are kept in VS Code's secret storage)."
-                },
-                "infraonAssistant.web.search.searxngUrl": {
-                    "type": "string",
-                    "default": "",
-                    "markdownDescription": "Base URL of a SearXNG instance, e.g. `https://search.corp.example`. Its JSON format must be enabled (`search.formats: [html, json]`)."
-                },
-                "infraonAssistant.web.search.googleCx": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Google Programmable Search engine id (cx)."
-                },
-                "infraonAssistant.web.researchTools": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Give the agents the R&D research tools: academic papers (Semantic Scholar, arXiv, PubMed, Crossref, OpenAlex), package registries, vulnerability databases (OSV, NVD), GitHub, Hacker News, Stack Overflow, Wikipedia and RFCs."
-                },
-                "infraonAssistant.web.proxy": {
-                    "type": "string",
-                    "default": "",
-                    "markdownDescription": "Proxy for web access, e.g. `http://proxy.corp:8080` (credentials allowed: `http://user:pass@host:port`). Empty: `HTTPS_PROXY` from the environment, else VS Code's own proxy setting."
-                },
-                "infraonAssistant.web.noProxy": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "default": [],
-                    "description": "Hosts reached directly, without the proxy (exact or *.suffix). NO_PROXY from the environment is added."
-                },
-                "infraonAssistant.web.extraCaFile": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Path to a PEM file with extra CA certificates, for networks that inspect TLS traffic."
-                },
-                "infraonAssistant.web.allowSelfSignedTls": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Accept invalid or self-signed certificates on websites (not recommended; prefer Extra CA File)."
-                },
-                "infraonAssistant.web.cacheTtlMinutes": {
-                    "type": "number",
-                    "default": 15,
-                    "minimum": 0,
-                    "description": "How long a fetched page is reused before it is checked again (pages that did not change are not downloaded again)."
-                },
-                "infraonAssistant.web.cacheMaxMB": {
-                    "type": "number",
-                    "default": 200,
-                    "minimum": 10,
-                    "description": "Disk space for cached pages and snapshots (oldest are removed first)."
-                },
-                "infraonAssistant.web.offline": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Offline mode: nothing is sent to the internet; agents use cached pages and the offline library only."
-                },
-                "infraonAssistant.web.allowDownloads": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Let the agent save files from the web into the workspace (with approval unless edits are automatic). Executables are always refused."
-                },
-                "infraonAssistant.web.maxDownloadMB": {
-                    "type": "number",
-                    "default": 50,
-                    "minimum": 1,
-                    "description": "Largest file the agent may download."
-                },
-                "infraonAssistant.web.searchDailyLimit": {
-                    "type": "number",
-                    "default": 200,
-                    "minimum": 1,
-                    "description": "Web searches per day across all sessions (protects paid search API quotas)."
-                },
-                "infraonAssistant.web.maxRequestsPerSession": {
-                    "type": "number",
-                    "default": 400,
-                    "minimum": 1,
-                    "description": "Web requests one session may make (pages, searches and research API calls)."
-                },
-                "infraonAssistant.confirmDangerousRemoteCommands": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Ask before a remote command that could wreck a server (reboot or power off, formatting or repartitioning a disk, overwriting a disk with dd, recursively deleting or changing permissions of system folders), even in Auto-execute. Everything else runs without asking in Auto-execute."
-                },
-                "infraonAssistant.testing.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Give the agents testing tools: a real browser (Chrome/Edge) to open and drive web apps and catch load failures, JavaScript errors and failed API calls; failure simulation; API tests; data comparison; and read-only database queries."
-                },
-                "infraonAssistant.testing.browserPath": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Chrome, Edge or Chromium executable for browser tests. Empty: the installed Chrome or Edge is found automatically."
-                },
-                "infraonAssistant.testing.headless": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Run the test browser without a window. Turn off to watch the agent use the browser."
-                },
-                "infraonAssistant.testing.timeoutSeconds": {
-                    "type": "number",
-                    "default": 30,
-                    "minimum": 1,
-                    "maximum": 600,
-                    "description": "Default timeout for page loads and API test requests."
-                },
-                "infraonAssistant.testing.slowRequestMs": {
-                    "type": "number",
-                    "default": 3000,
-                    "minimum": 100,
-                    "description": "Requests slower than this are reported as slow."
-                },
-                "infraonAssistant.testing.ignoreHttpsErrors": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Accept invalid or self-signed TLS certificates in browser and API tests (internal test servers only)."
-                },
-                "infraonAssistant.testing.browserIdleMinutes": {
-                    "type": "number",
-                    "default": 10,
-                    "minimum": 1,
-                    "description": "Close a test browser after it has not been used for this many minutes."
-                },
-                "infraonAssistant.testing.reportsFolder": {
-                    "type": "string",
-                    "default": "test-reports",
-                    "description": "Workspace folder for /qa test reports and screenshots."
-                },
-                "infraonAssistant.testing.databases": {
-                    "type": "array",
-                    "default": [],
-                    "markdownDescription": "Databases the agents may query **read-only** (for data checks). Each: `name`, `type` (`postgres`, `mysql`, `sqlite`, `sqlserver`), `host`, `port`, `database`, `user` (or `file` for SQLite), optional `cli` (path to psql/mysql/sqlite3/sqlcmd) and `description`. Set passwords with **Infraon Assistant: Set Test Database Password** (stored encrypted). Use a read-only database user.",
-                    "items": {
+                    "infraonAssistant.modelRouting": {
                         "type": "object",
-                        "required": [
-                            "name",
-                            "type"
-                        ],
+                        "default": {},
                         "properties": {
-                            "name": {
+                            "subagent": {
                                 "type": "string"
                             },
-                            "type": {
-                                "type": "string",
-                                "enum": [
-                                    "postgres",
-                                    "mysql",
-                                    "sqlite",
-                                    "sqlserver"
-                                ]
-                            },
-                            "host": {
+                            "completion": {
                                 "type": "string"
                             },
-                            "port": {
-                                "type": "number"
-                            },
-                            "database": {
+                            "summary": {
                                 "type": "string"
                             },
-                            "user": {
-                                "type": "string"
-                            },
-                            "file": {
-                                "type": "string"
-                            },
-                            "cli": {
-                                "type": "string"
-                            },
-                            "description": {
+                            "commit": {
                                 "type": "string"
                             }
-                        }
+                        },
+                        "additionalProperties": false,
+                        "description": "Use specific models for smaller jobs. Anything left empty uses the model selected in the chat.",
+                        "order": 8
+                    }
+                }
+            },
+            {
+                "id": "infraonAssistant.agents",
+                "title": "Agents",
+                "order": 1,
+                "properties": {
+                    "infraonAssistant.maxIterations": {
+                        "type": "number",
+                        "default": 1200,
+                        "description": "Max tool-call rounds per request (default 1200, enough to build a mid-size project in one go). 0 uses the effort level's value instead (low 15, medium 50, high 80, max 120).",
+                        "order": 0
+                    },
+                    "infraonAssistant.autoApprove": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Skip approval prompts for file edits and commands (not recommended).",
+                        "order": 1
+                    },
+                    "infraonAssistant.mcpServers": {
+                        "type": "object",
+                        "default": {},
+                        "markdownDescription": "MCP (Model Context Protocol) servers started over stdio. Example: `{ \"docs\": { \"command\": \"npx\", \"args\": [\"-y\", \"some-mcp-server\"], \"env\": { \"TOKEN\": \"...\" } } }`. A workspace `.mcp.json` file is also supported and asks for approval first.",
+                        "order": 2
+                    },
+                    "infraonAssistant.ripgrepPath": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Optional path to a ripgrep (rg) binary used for fast code search. Empty = use VS Code's bundled copy, then rg on PATH, then a built-in fallback.",
+                        "order": 3
+                    },
+                    "infraonAssistant.searchEngine": {
+                        "type": "string",
+                        "enum": [
+                            "auto",
+                            "ripgrep",
+                            "builtin"
+                        ],
+                        "default": "auto",
+                        "enumDescriptions": [
+                            "Use the indexed built-in engine when the file index is ready (best on large repos), otherwise ripgrep.",
+                            "Always use ripgrep.",
+                            "Always use the built-in indexed engine (parallel, .gitignore-aware, source-first)."
+                        ],
+                        "description": "Engine used by the code-search tool.",
+                        "order": 4
+                    },
+                    "infraonAssistant.maxConcurrentAgents": {
+                        "type": "number",
+                        "default": 4,
+                        "minimum": 1,
+                        "maximum": 32,
+                        "description": "How many agents (across all sessions) may talk to the LLM at the same time. Extra agents wait in a queue.",
+                        "order": 5
+                    },
+                    "infraonAssistant.agentWorktrees": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Run each editing sub-agent in its own git worktree and branch, then merge from the Changes panel.",
+                        "order": 6
+                    },
+                    "infraonAssistant.visibleTerminal": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Let the agent run commands and dev servers in a VS Code terminal you can watch.",
+                        "order": 7
+                    },
+                    "infraonAssistant.teamSkills": {
+                        "type": "array",
+                        "default": [],
+                        "items": {
+                            "type": [
+                                "string",
+                                "object"
+                            ]
+                        },
+                        "markdownDescription": "Shared skill libraries: folders or git URLs that everyone on the team receives automatically.",
+                        "order": 8
+                    },
+                    "infraonAssistant.autoVerify": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "After the agent changes files, run the project's checks (typecheck, lint, tests) before it finishes, and send failures back to it to fix (up to 2 times). Commands come from Verify Commands, else a '## Verify' section in INFRAON.md / CLAUDE.md / AGENTS.md, else are detected from package.json, pyproject.toml, go.mod, Cargo.toml, pom.xml or Gradle. Checks follow the session's approval mode.",
+                        "order": 9
+                    },
+                    "infraonAssistant.verifyCommands": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": [],
+                        "description": "Commands that check this project after code changes, run in order (for example `npm run lint`, `npm test`). Overrides detection. Leave empty to detect them.",
+                        "order": 10
+                    }
+                }
+            },
+            {
+                "id": "infraonAssistant.inline-completions",
+                "title": "Inline Completions",
+                "order": 2,
+                "properties": {
+                    "infraonAssistant.inlineCompletions.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Show AI ghost-text suggestions while typing (sent only to the company LLM).",
+                        "order": 0
+                    },
+                    "infraonAssistant.inlineCompletions.debounceMs": {
+                        "type": "number",
+                        "default": 450,
+                        "minimum": 100,
+                        "description": "Wait this long after you stop typing before requesting a suggestion.",
+                        "order": 1
+                    },
+                    "infraonAssistant.inlineCompletions.maxTokens": {
+                        "type": "number",
+                        "default": 128,
+                        "minimum": 16,
+                        "maximum": 512,
+                        "description": "Maximum length of a suggestion.",
+                        "order": 2
+                    },
+                    "infraonAssistant.inlineCompletions.model": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Model for completions. Empty = use the model selected in the chat.",
+                        "order": 3
+                    }
+                }
+            },
+            {
+                "id": "infraonAssistant.notifications",
+                "title": "Notifications",
+                "order": 3,
+                "properties": {
+                    "infraonAssistant.notifications.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Show a VS Code notification when a session needs you or finishes.",
+                        "order": 0
+                    },
+                    "infraonAssistant.notifications.minDurationSeconds": {
+                        "type": "number",
+                        "default": 30,
+                        "minimum": 0,
+                        "description": "Only announce finished tasks that ran at least this long.",
+                        "order": 1
+                    },
+                    "infraonAssistant.notifications.taskDone": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Notify when a long task finishes.",
+                        "order": 2
+                    },
+                    "infraonAssistant.notifications.needsInput": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Notify when an approval or question is waiting.",
+                        "order": 3
+                    },
+                    "infraonAssistant.notifications.backgroundAgents": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Notify when a background agent finishes.",
+                        "order": 4
+                    },
+                    "infraonAssistant.notifications.errors": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Notify when an agent stops with an error.",
+                        "order": 5
+                    }
+                }
+            },
+            {
+                "id": "infraonAssistant.security-policy",
+                "title": "Security and Policy",
+                "order": 4,
+                "properties": {
+                    "infraonAssistant.redactSecrets": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Mask keys, tokens and passwords before text is sent to the LLM. Real values stay on this machine.",
+                        "order": 0
+                    },
+                    "infraonAssistant.auditLog": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Keep a local log of every command, edit and approval per session.",
+                        "order": 1
+                    },
+                    "infraonAssistant.policyUrl": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Optional URL of the central policy file. A policy installed on the machine takes priority.",
+                        "order": 2
+                    },
+                    "infraonAssistant.confirmDangerousRemoteCommands": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Ask before a remote command that could wreck a server (reboot or power off, formatting or repartitioning a disk, overwriting a disk with dd, recursively deleting or changing permissions of system folders), even in Auto-execute. Everything else runs without asking in Auto-execute.",
+                        "order": 3
+                    }
+                }
+            },
+            {
+                "id": "infraonAssistant.web-access",
+                "title": "Web Access",
+                "order": 5,
+                "properties": {
+                    "infraonAssistant.web.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Let the agents search the web and read pages, PDFs, documents and images from the internet. Your organization policy can turn this off.",
+                        "order": 0
+                    },
+                    "infraonAssistant.web.approval": {
+                        "type": "string",
+                        "enum": [
+                            "new-domains",
+                            "always",
+                            "never"
+                        ],
+                        "default": "new-domains",
+                        "enumDescriptions": [
+                            "Ask the first time a session contacts a site that is not in Allowed Domains (Auto-execute does not ask).",
+                            "Ask before every page the agent fetches or downloads.",
+                            "Never ask (blocked domains and secrets are still refused)."
+                        ],
+                        "description": "When the agent needs your approval to contact a website. Search and research APIs (arXiv, GitHub, package registries…) never ask.",
+                        "order": 1
+                    },
+                    "infraonAssistant.web.allowedDomains": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "markdownDescription": "Sites fetched without asking. Exact host or `*.example.com`. When not set, a built-in list of documentation, standards and research sites is used (github.com, developer.mozilla.org, docs.python.org, arxiv.org, stackoverflow.com, …).",
+                        "order": 2
+                    },
+                    "infraonAssistant.web.askDomains": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": [],
+                        "description": "Sites that always need approval, even in Auto-execute or after an earlier approval.",
+                        "order": 3
+                    },
+                    "infraonAssistant.web.blockedDomains": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": [],
+                        "description": "Sites that are never contacted.",
+                        "order": 4
+                    },
+                    "infraonAssistant.web.allowPrivateHosts": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": [],
+                        "markdownDescription": "Intranet hosts the agent may read although they have private IP addresses (internal wiki, docs portal). Everything else on private networks, localhost and cloud metadata addresses is always blocked.",
+                        "order": 5
+                    },
+                    "infraonAssistant.web.blockedQueryPatterns": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": [],
+                        "description": "Regular expressions. A URL or search query that matches one is never sent (internal project code names, customer names). Secrets are always blocked.",
+                        "order": 6
+                    },
+                    "infraonAssistant.web.search.provider": {
+                        "type": "string",
+                        "enum": [
+                            "auto",
+                            "searxng",
+                            "brave",
+                            "tavily",
+                            "bing",
+                            "google",
+                            "duckduckgo"
+                        ],
+                        "default": "auto",
+                        "enumDescriptions": [
+                            "The first configured provider (SearXNG URL or an API key), else DuckDuckGo.",
+                            "A self-hosted SearXNG instance (set Search: Searxng Url). Private: queries stay on your network.",
+                            "Brave Search API (key).",
+                            "Tavily, built for AI research (key).",
+                            "Bing Web Search (key).",
+                            "Google Programmable Search (key + Search: Google Cx).",
+                            "DuckDuckGo without a key (best effort; may be rate-limited)."
+                        ],
+                        "markdownDescription": "Web search provider. Set API keys with **Infraon Assistant: Set Web Search API Key or GitHub Token** (they are kept in VS Code's secret storage).",
+                        "order": 7
+                    },
+                    "infraonAssistant.web.search.searxngUrl": {
+                        "type": "string",
+                        "default": "",
+                        "markdownDescription": "Base URL of a SearXNG instance, e.g. `https://search.corp.example`. Its JSON format must be enabled (`search.formats: [html, json]`).",
+                        "order": 8
+                    },
+                    "infraonAssistant.web.search.googleCx": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Google Programmable Search engine id (cx).",
+                        "order": 9
+                    },
+                    "infraonAssistant.web.researchTools": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Give the agents the R&D research tools: academic papers (Semantic Scholar, arXiv, PubMed, Crossref, OpenAlex), package registries, vulnerability databases (OSV, NVD), GitHub, Hacker News, Stack Overflow, Wikipedia and RFCs.",
+                        "order": 10
+                    },
+                    "infraonAssistant.web.proxy": {
+                        "type": "string",
+                        "default": "",
+                        "markdownDescription": "Proxy for web access, e.g. `http://proxy.corp:8080` (credentials allowed: `http://user:pass@host:port`). Empty: `HTTPS_PROXY` from the environment, else VS Code's own proxy setting.",
+                        "order": 11
+                    },
+                    "infraonAssistant.web.noProxy": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": [],
+                        "description": "Hosts reached directly, without the proxy (exact or *.suffix). NO_PROXY from the environment is added.",
+                        "order": 12
+                    },
+                    "infraonAssistant.web.extraCaFile": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Path to a PEM file with extra CA certificates, for networks that inspect TLS traffic.",
+                        "order": 13
+                    },
+                    "infraonAssistant.web.allowSelfSignedTls": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Accept invalid or self-signed certificates on websites (not recommended; prefer Extra CA File).",
+                        "order": 14
+                    },
+                    "infraonAssistant.web.cacheTtlMinutes": {
+                        "type": "number",
+                        "default": 15,
+                        "minimum": 0,
+                        "description": "How long a fetched page is reused before it is checked again (pages that did not change are not downloaded again).",
+                        "order": 15
+                    },
+                    "infraonAssistant.web.cacheMaxMB": {
+                        "type": "number",
+                        "default": 200,
+                        "minimum": 10,
+                        "description": "Disk space for cached pages and snapshots (oldest are removed first).",
+                        "order": 16
+                    },
+                    "infraonAssistant.web.offline": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Offline mode: nothing is sent to the internet; agents use cached pages and the offline library only.",
+                        "order": 17
+                    },
+                    "infraonAssistant.web.allowDownloads": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Let the agent save files from the web into the workspace (with approval unless edits are automatic). Executables are always refused.",
+                        "order": 18
+                    },
+                    "infraonAssistant.web.maxDownloadMB": {
+                        "type": "number",
+                        "default": 50,
+                        "minimum": 1,
+                        "description": "Largest file the agent may download.",
+                        "order": 19
+                    },
+                    "infraonAssistant.web.searchDailyLimit": {
+                        "type": "number",
+                        "default": 200,
+                        "minimum": 1,
+                        "description": "Web searches per day across all sessions (protects paid search API quotas).",
+                        "order": 20
+                    },
+                    "infraonAssistant.web.maxRequestsPerSession": {
+                        "type": "number",
+                        "default": 400,
+                        "minimum": 1,
+                        "description": "Web requests one session may make (pages, searches and research API calls).",
+                        "order": 21
+                    }
+                }
+            },
+            {
+                "id": "infraonAssistant.testing",
+                "title": "Testing",
+                "order": 6,
+                "properties": {
+                    "infraonAssistant.testing.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Give the agents testing tools: a real browser (Chrome/Edge) to open and drive web apps and catch load failures, JavaScript errors and failed API calls; failure simulation; API tests; data comparison; and read-only database queries.",
+                        "order": 0
+                    },
+                    "infraonAssistant.testing.browserPath": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Chrome, Edge or Chromium executable for browser tests. Empty: the installed Chrome or Edge is found automatically.",
+                        "order": 1
+                    },
+                    "infraonAssistant.testing.headless": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Run the test browser without a window. Turn off to watch the agent use the browser.",
+                        "order": 2
+                    },
+                    "infraonAssistant.testing.timeoutSeconds": {
+                        "type": "number",
+                        "default": 30,
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Default timeout for page loads and API test requests.",
+                        "order": 3
+                    },
+                    "infraonAssistant.testing.slowRequestMs": {
+                        "type": "number",
+                        "default": 3000,
+                        "minimum": 100,
+                        "description": "Requests slower than this are reported as slow.",
+                        "order": 4
+                    },
+                    "infraonAssistant.testing.ignoreHttpsErrors": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Accept invalid or self-signed TLS certificates in browser and API tests (internal test servers only).",
+                        "order": 5
+                    },
+                    "infraonAssistant.testing.browserIdleMinutes": {
+                        "type": "number",
+                        "default": 10,
+                        "minimum": 1,
+                        "description": "Close a test browser after it has not been used for this many minutes.",
+                        "order": 6
+                    },
+                    "infraonAssistant.testing.reportsFolder": {
+                        "type": "string",
+                        "default": "test-reports",
+                        "description": "Workspace folder for /qa test reports and screenshots.",
+                        "order": 7
+                    },
+                    "infraonAssistant.testing.databases": {
+                        "type": "array",
+                        "default": [],
+                        "markdownDescription": "Databases the agents may query **read-only** (for data checks). Each: `name`, `type` (`postgres`, `mysql`, `sqlite`, `sqlserver`), `host`, `port`, `database`, `user` (or `file` for SQLite), optional `cli` (path to psql/mysql/sqlite3/sqlcmd) and `description`. Set passwords with **Infraon Assistant: Set Test Database Password** (stored encrypted). Use a read-only database user.",
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "name",
+                                "type"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string"
+                                },
+                                "type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "postgres",
+                                        "mysql",
+                                        "sqlite",
+                                        "sqlserver"
+                                    ]
+                                },
+                                "host": {
+                                    "type": "string"
+                                },
+                                "port": {
+                                    "type": "number"
+                                },
+                                "database": {
+                                    "type": "string"
+                                },
+                                "user": {
+                                    "type": "string"
+                                },
+                                "file": {
+                                    "type": "string"
+                                },
+                                "cli": {
+                                    "type": "string"
+                                },
+                                "description": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "order": 8
+                    }
+                }
+            },
+            {
+                "id": "infraonAssistant.updates",
+                "title": "Updates",
+                "order": 7,
+                "properties": {
+                    "infraonAssistant.autoUpdate": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Install new versions published on the company server automatically (you are asked to reload the window). When off, new versions are announced and installed only when you click Install. Read from user settings only.",
+                        "order": 0
+                    },
+                    "infraonAssistant.updateUrl": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Optional URL of the update manifest. Empty: https://<gateway host>/infraon-assistant/updates/latest.json, taken from the base URL.",
+                        "order": 1
                     }
                 }
             }
-        },
+        ],
         "keybindings": [
             {
                 "command": "infraonAssistant.newSession",
@@ -660,25 +821,39 @@
         ]
     },
     "scripts": {
-        "compile": "tsc -p .",
+        "vscode:prepublish": "tsc -p . && node scripts/bundle.mjs --production",
+        "compile": "tsc -p . && node scripts/bundle.mjs",
         "watch": "tsc -watch -p .",
+        "watch:bundle": "node scripts/bundle.mjs --watch",
+        "bundle": "node scripts/bundle.mjs --production",
         "package": "vsce package",
+        "lint": "eslint . --max-warnings 0",
+        "lint:fix": "eslint . --fix",
+        "format": "prettier --write",
+        "format:check": "prettier --check",
+        "typecheck": "tsc -p . --noEmit",
         "test": "tsc -p . && node --test \"out/test/*.test.js\" && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
-        "test:e2e": "tsc -p . && node out/e2e/run.js",
+        "test:unit": "tsc -p . && node --test \"out/test/*.test.js\"",
+        "test:slow": "tsc -p . && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
+        "test:coverage": "tsc -p . && node --test --experimental-test-coverage --test-coverage-include=\"out/core/**\" --test-coverage-include=\"out/host/**\" \"out/test/*.test.js\"",
+        "test:e2e": "npm run compile && node out/e2e/run.js",
         "eval": "tsc -p . && node out/eval/run.js",
         "e2e:build": "tsc -p . && node out/eval/buildProject.js"
     },
     "devDependencies": {
+        "@eslint/js": "^9.39.5",
         "@types/node": "^20.0.0",
         "@types/ssh2": "^1.15.6",
         "@types/vscode": "^1.90.0",
         "@vscode/test-electron": "^2.5.2",
         "@vscode/vsce": "^3.0.0",
+        "esbuild": "^0.25.12",
+        "eslint": "^9.39.5",
         "mermaid": "^11.17.2",
-        "typescript": "^5.5.0"
+        "prettier": "^3.10.1",
+        "ssh2": "1.17.0",
+        "typescript": "^5.5.0",
+        "typescript-eslint": "^8.73.0"
     },
-    "icon": "media/icon.png",
-    "dependencies": {
-        "ssh2": "1.17.0"
-    }
+    "icon": "media/icon.png"
 }

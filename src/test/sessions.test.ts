@@ -5,7 +5,7 @@ import * as path from 'path';
 import { Session, SessionStore, historyToUi, titleFrom } from '../core/sessions';
 import { Agent } from '../core/agent';
 import { createFsTools } from '../core/fstools';
-import { call, fakeLlm, recordingUi, text, tmpDir } from './helpers';
+import { fakeLlm, recordingUi, text, tmpDir } from './helpers';
 
 const mk = (id: string, updatedAt: number, extra: Partial<Session> = {}): Session => ({
   id, title: `t-${id}`, createdAt: 1, updatedAt, model: 'm', mode: 'ask', effort: 'medium',

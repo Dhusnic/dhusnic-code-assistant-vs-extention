@@ -229,8 +229,7 @@ export async function runBuild(opts: BuildOptions, llm: LlmFn): Promise<BuildRep
   let mainId = '';
   let todos: Array<{ content: string; status: string }> = [];
 
-  // eslint-disable-next-line prefer-const
-  let mgr: SessionManager;
+  let mgr: SessionManager; // assigned below; the agent factory closes over it
   const tools = () => createFsTools();
   const createAgent = (sid: string, aid: string, spec: AgentSpec = { role: 'main' }): Agent => {
     const sub = spec.role === 'sub' ? spec.type : undefined;

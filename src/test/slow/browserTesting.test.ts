@@ -136,7 +136,7 @@ describe('testing tools in a real browser', { skip: findBrowser() ? false : 'no 
     assert.match(out, /✘ JavaScript error: TypeError: Cannot read properties of undefined \(reading 'map'\)/);
     assert.match(out, /✘ Console error: boom: config missing/);
     assert.match(out, /✘ API GET .*\/api\/crash → HTTP 500/);
-    assert.match(out, new RegExp(`✘ API call failed: GET http://127\.0\.0\.1:${deadPort}/api/down → net::ERR_CONNECTION_REFUSED`));
+    assert.match(out, new RegExp(`✘ API call failed: GET http://127\\.0\\.0\\.1:${deadPort}/api/down → net::ERR_CONNECTION_REFUSED`));
     assert.match(out, /✘ Image GET .*\/missing\.png → HTTP 404/);
     assert.match(out, /⚠ alert dialog shown \(accepted automatically\): "Something failed"/);
     assert.match(out, /⚠ 1 console warning\(s\), e\.g\. deprecated thing/);
@@ -160,10 +160,10 @@ describe('testing tools in a real browser', { skip: findBrowser() ? false : 'no 
   it('reads the data table and finds the value the UI shows wrong (UI vs API)', async () => {
     const out = await run('browser_open', { url: `${base}/app.html`, wait_for: 'text=3 users' });
     assert.match(out, /✔ No errors detected/);
-    assert.match(out, /input\[email\] "Email"  →  #email/);
-    assert.match(out, /select "Role" \(value="User"\)  →  #role/);
-    assert.match(out, /input\[checkbox\] "Remember me" \(unchecked\)  →  #remember/);
-    assert.match(out, /button\[submit\] "Sign in"  →  text=Sign in/);
+    assert.match(out, /input\[email\] "Email" {2}→ {2}#email/);
+    assert.match(out, /select "Role" \(value="User"\) {2}→ {2}#role/);
+    assert.match(out, /input\[checkbox\] "Remember me" \(unchecked\) {2}→ {2}#remember/);
+    assert.match(out, /button\[submit\] "Sign in" {2}→ {2}text=Sign in/);
     const table = await run('browser_read', { what: 'table', selector: '#users' });
     assert.match(table, /3 row\(s\); columns: ID, Name, Email, Price, Active, Joined/);
     assert.match(table, /\| 1 \| Ann Lee \| ann@example\.com \| \$1,234\.50 \| Yes \| Jan 5, 2024 \|/);

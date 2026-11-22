@@ -107,7 +107,7 @@
 
   /** Plain text (status messages, /sources) with its web addresses made clickable; nothing else is interpreted. */
   function autolink(s) {
-    return esc(s).replace(/(^|[\s(\[])(https?:\/\/[^\s<]*[^\s<.,;:!?)\]'])/g, (_, pre, href) => `${pre}${link(href, href)}`);
+    return esc(s).replace(/(^|[\s([])(https?:\/\/[^\s<]*[^\s<.,;:!?)\]'])/g, (_, pre, href) => `${pre}${link(href, href)}`);
   }
 
   const api = { md, inline, esc, autolink, cells, isRow, isSep };

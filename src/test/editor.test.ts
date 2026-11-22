@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createRequire } from 'module';
-import { buildFixPrompt, buildInlineEditMessages, cleanInlineEdit, trimAround } from '../core/inlineEdit';
+import { DOCUMENT_INSTRUCTION, buildFixPrompt, buildInlineEditMessages, buildTestsPrompt, cleanInlineEdit, trimAround } from '../core/inlineEdit';
 import { AgentActivity, NotificationTracker, NotifyContext, decideNotification } from '../core/notify';
 
 /* ------------------------------------------------------------ inlineEdit */
@@ -140,6 +140,14 @@ test('buildFixPrompt: names the problem and the place, and survives fences in th
   const p = buildFixPrompt({ message: 'x is undefined', severity: 'error', source: 'ts', code: 2304 }, 'src/a.ts', 12, 'const y = x;');
   for (const part of ['error', 'src/a.ts', 'line 12', 'ts 2304', 'x is undefined', 'const y = x;']) { assert.ok(p.includes(part), part); }
   assert.ok(buildFixPrompt({ message: 'm' }, 'a.md', 1, '```js\nx\n```').includes('````\n```js'));
+});
+
+test('buildTestsPrompt: names the file and lines, fences the code safely, and asks to follow the project and run the tests', () => {
+  const p = buildTestsPrompt('src/math.ts', 3, 9, 'export const add = (a: number, b: number) => a + b;', 'typescript');
+  for (const part of ['src/math.ts', 'lines 3-9', '```typescript\nexport const add', 'framework', 'conventions', 'edge cases', 'Run the new tests']) { assert.ok(p.includes(part), part); }
+  assert.match(buildTestsPrompt('a.py', 4, 4, 'x = 1', 'python'), /\(line 4\)/);
+  assert.ok(buildTestsPrompt('a.md', 1, 2, '```js\nx\n```', 'markdown').includes('````markdown\n```js'), 'a longer fence wraps code that has fences');
+  assert.match(DOCUMENT_INSTRUCTION, /Do not change any code/);
 });
 
 /* ------------------------------------------------------------ notify */

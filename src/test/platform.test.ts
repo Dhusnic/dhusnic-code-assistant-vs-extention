@@ -1245,12 +1245,15 @@ describe('loading a policy', () => {
   const env = (file?: string): Record<string, string | undefined> => (file ? { INFRAON_POLICY_FILE: file } : {});
   const noMachine = async (): Promise<{ platform: string; programData: string }> => ({ platform: 'win32', programData: path.join(await scratch(), 'none') });
   const okFetch = (text: string, status = 200) => async () => ({ status, text });
+  // These place a real file under a simulated %ProgramData%, which only resolves on Windows (path.win32 paths);
+  // elsewhere the machine policy is /etc/infraon/policy.json, which tests cannot write.
+  const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'simulates %ProgramData% (Windows paths)' };
 
   test('nothing configured', async () => {
     assert.deepEqual(await loadPolicy({ env: {}, ...await noMachine() }), { policy: {}, source: 'none', errors: [] });
   });
 
-  test('a user-set env file can never replace the machine policy', async () => {
+  test('a user-set env file can never replace the machine policy', WINDOWS_ONLY, async () => {
     const base = await scratch();
     const f = path.join(base, 'p.json');
     const machine = path.join(base, 'Infraon', 'policy.json');
@@ -1270,7 +1273,7 @@ describe('loading a policy', () => {
     assert.equal(r.policy.auditLog, true);
   });
 
-  test('the machine file is used next', async () => {
+  test('the machine file is used next', WINDOWS_ONLY, async () => {
     const base = await scratch();
     await write(path.join(base, 'Infraon', 'policy.json'), '\uFEFF{"redactSecrets":true}');
     const r = await loadPolicy({ env: {}, platform: 'win32', programData: base, url: 'https://x.example/p', fetchFn: async () => { throw new Error('must not fetch'); } });
@@ -1285,7 +1288,7 @@ describe('loading a policy', () => {
     assert.match(r.errors[0], /not found/);
   });
 
-  test('a malformed machine file fails closed and does not fall through to the URL', async () => {
+  test('a malformed machine file fails closed and does not fall through to the URL', WINDOWS_ONLY, async () => {
     const base = await scratch();
     await write(path.join(base, 'Infraon', 'policy.json'), '{oops');
     const r = await loadPolicy({ env: {}, platform: 'win32', programData: base, url: 'https://x.example/p', fetchFn: okFetch('{"disableAutoMode":false}') });

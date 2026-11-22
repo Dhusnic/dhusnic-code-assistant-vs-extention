@@ -4,7 +4,7 @@
  * unlocks private repositories the token can see.
  */
 import { ConnectorResult, ConnectorSource, FetchResponse, HttpFetch, WebError } from '../types';
-import { ConnectorOpts, arr, cell, clampInt, clean, excerpt, fmtInt, httpError, isoDate, num, obj, parseJson, result, source, stripTags } from './util';
+import { ConnectorOpts, arr, cell, clampInt, clean, excerpt, fmtInt, httpError, isoDate, num, parseJson, result, source, stripTags } from './util';
 
 export type GithubAction = 'repo' | 'search_repos' | 'releases' | 'issues' | 'search_issues' | 'readme' | 'file' | 'commits' | 'compare_stars';
 
