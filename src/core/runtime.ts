@@ -13,6 +13,10 @@ import { TodoItem, attachAction, finishAction, mergeTodos } from './todos';
 /**
  * Runs many sessions, each with many agents, concurrently. Every agent keeps a transcript log of UI events so
  * the chat view can switch between agents at any time (even mid-run) and replay exactly what happened.
+ *
+ * The activity line says what an agent is doing. Until the first byte of a model reply arrives it reads "Waiting for
+ * the model…", and after WAIT_NOTICE_MS of silence it counts the seconds, so a stuck gateway is not mistaken for a
+ * model that is thinking. Tokens and tool-call progress then take over the line.
  */
 
 export type UiEvent = { type: string; [k: string]: any };
@@ -59,6 +63,8 @@ export class AgentRuntime {
   run?: Promise<void>;
   cancelQueued?: () => void;
   saveTimer?: NodeJS.Timeout;
+  /** Counts the seconds while a model call has not sent its first byte (see SessionManager.waitForModel). */
+  waitTimer?: NodeJS.Timeout;
   role: AgentRole = 'main';
   parentId?: string;
   type?: string;
@@ -167,6 +173,19 @@ export interface ManagerDeps {
   /** The current window's workspace key (see workspaceKey); recorded on every session this manager creates or opens. */
   workspace?(): string;
   saveThrottleMs?: number;
+  /** Tests: silence before the wait shows its seconds (default WAIT_NOTICE_MS), and how often it updates (WAIT_TICK_MS). */
+  waitNoticeMs?: number;
+  waitTickMs?: number;
+}
+
+export const WAITING_LABEL = 'Waiting for the model…';
+/** After this long without a first byte, the activity line counts the seconds. */
+export const WAIT_NOTICE_MS = 30_000;
+export const WAIT_TICK_MS = 5_000;
+
+/** Status-line text while a model call has not answered yet, e.g. "Waiting for the model… no response for 45 s". */
+export function waitingLabel(waitedMs: number, noticeMs = WAIT_NOTICE_MS): string {
+  return waitedMs < noticeMs ? WAITING_LABEL : `${WAITING_LABEL} no response for ${Math.round(waitedMs / 1000)} s`;
 }
 
 /** Status-line text while the model is still writing a tool call, e.g. "Writing index.html… 14.2 KB". */
@@ -424,6 +443,7 @@ export class SessionManager {
       this.emit(rt, { type: 'info', text: `Error: ${rt.error}`, error: true });
       this.setStatus(rt, 'error', `Error: ${rt.error}`);
     } finally {
+      this.stopWaiting(rt);
       if (queued) { this.release(); }
       if (rt.role === 'sub') { this.settleSub(rt); }
       for (const [id, p] of rt.pending) { p.resolve(p.kind === 'approve' ? false : null); this.emit(rt, { type: 'approvalDone', id, label: 'cancelled' }); }
@@ -699,9 +719,16 @@ export class SessionManager {
 
   private uiFor(rt: AgentRuntime): AgentUi {
     return {
-      token: (t) => { if (rt.activity !== 'Writing response…') { this.setStatus(rt, rt.status, 'Writing response…'); } this.emit(rt, { type: 'token', text: t }); },
+      token: (t) => { this.stopWaiting(rt); if (rt.activity !== 'Writing response…') { this.setStatus(rt, rt.status, 'Writing response…'); } this.emit(rt, { type: 'token', text: t }); },
       // Status line only (not logged): toolStart replaces it with the call's own detail once the call is complete.
-      toolWriting: (p) => this.setStatus(rt, rt.status, toolWritingLabel(p)),
+      toolWriting: (p) => { this.stopWaiting(rt); this.setStatus(rt, rt.status, toolWritingLabel(p)); },
+      modelCall: (phase) => {
+        if (phase === 'waiting') { this.waitForModel(rt); return; }
+        const waiting = !!rt.waitTimer;
+        this.stopWaiting(rt);
+        // First byte: the model is working (perhaps only reasoning so far) until text or a tool call shows up.
+        if (phase === 'receiving' && waiting && rt.activity.startsWith(WAITING_LABEL)) { this.setStatus(rt, rt.status, 'Thinking…'); }
+      },
       toolStart: (id, name, kind, args, detail, preview) => {
         let diff;
         if (preview) { rt.previews.set(id, preview); diff = { id, path: preview.path, ...diffText(preview.oldText, preview.newText) }; }
@@ -791,6 +818,23 @@ export class SessionManager {
     const s = this.sessions.get(rt.sessionId);
     if (s) { s.updatedAt = rt.updatedAt; }
     this.deps.onEvent?.(rt.sessionId, rt.id, ev);
+  }
+
+  /** Shows "Waiting for the model…" and, after the notice delay, how long the model has been silent. */
+  private waitForModel(rt: AgentRuntime): void {
+    this.stopWaiting(rt);
+    const since = Date.now();
+    const notice = this.deps.waitNoticeMs ?? WAIT_NOTICE_MS;
+    this.setStatus(rt, rt.status, WAITING_LABEL);
+    rt.waitTimer = setInterval(() => {
+      // Only while the line still shows the wait: an approval or another status must not be overwritten.
+      if (rt.activity.startsWith(WAITING_LABEL)) { this.setStatus(rt, rt.status, waitingLabel(Date.now() - since, notice)); }
+    }, this.deps.waitTickMs ?? WAIT_TICK_MS);
+    rt.waitTimer.unref?.();
+  }
+
+  private stopWaiting(rt: AgentRuntime): void {
+    if (rt.waitTimer) { clearInterval(rt.waitTimer); rt.waitTimer = undefined; }
   }
 
   private setStatus(rt: AgentRuntime, status: StoredStatus, activity: string): void {

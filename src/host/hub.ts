@@ -13,7 +13,8 @@ import { MemoryCache, loadMemoryText } from '../core/memoryFiles';
 import { ModelTask, RoutingConfig, routeModel } from '../core/modelRouting';
 import { parseTeamSources, syncTeamSkills } from '../core/teamSkills';
 import { FsToolsOptions, createFsTools } from '../core/fstools';
-import { LlmConfig, LlmFn, listModels, streamChat } from '../core/llm';
+import { LlmConfig, LlmFn, listModels, streamChat, streamChatOnce } from '../core/llm';
+import { ProbeState, healthView, probeModel, shouldProbe } from '../core/modelHealth';
 import { SamplingOverride, resolveSampling, sanitizeOverride } from '../core/sampling';
 import { McpManager, ServerStatus, mcpConfigHash, parseMcpConfig } from '../core/mcp';
 import { filterFiles } from '../core/mentions';
@@ -81,7 +82,9 @@ export class Hub {
   agentTypeErrors: string[] = [];
   skills: Skill[] = [];
   skillErrors: string[] = [];
+  /** The gateway check (model list); llmInfo combines it with the model probe below for the sidebar. */
   health: { ok?: boolean; ms?: number; error?: string; at?: number } = {};
+  private modelProbe: ProbeState = { inFlight: false };
   policy: CentralPolicy = {};
   readonly policyReady: Promise<void>;
   readonly safety: SafetyCenter;
@@ -345,7 +348,7 @@ export class Hub {
     const llm = this.llmFor(sid);
     return {
       root: this.root, llmConfig: () => this.llmConfig(),
-      llm: async (cfg, messages, tools, onToken, signal) => { const r = await llm(cfg, messages, tools, onToken, signal); return { ...r, content: this.safety.vault(sid).restore(r.content) }; },
+      llm: async (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => { const r = await llm(cfg, messages, tools, onToken, signal, onToolProgress, onEvent); return { ...r, content: this.safety.vault(sid).restore(r.content) }; },
       startSession: async (prompt) => { const s = this.manager.newSession(); await this.openSession(s.id); void this.manager.send(s.id, s.main().id, prompt).catch(() => undefined); },
     };
   }
@@ -672,14 +675,18 @@ export class Hub {
     try { host = new URL(host).host; } catch { /* keep raw */ }
     const running = this.manager.snapshot().flatMap((s) => s.agents).filter((a) => a.status === 'running' || a.status === 'waiting').length;
     return {
-      endpoint: host, model: this.defaults().model, models: this.models, health: this.health,
+      endpoint: host, model: this.defaults().model, models: this.models, health: healthView(this.health, this.modelProbe, this.defaults().model, this.probeMinutes() > 0),
       contextWindow: this.cfg.get<number>('contextWindow', 131072), running, queued: this.manager.snapshot().flatMap((s) => s.agents).filter((a) => a.status === 'queued').length,
       maxConcurrent: this.cfg.get<number>('maxConcurrentAgents', 4), usage: this.usage.summary(),
       mcp: this.mcp.status().map((s) => ({ name: s.name, status: s.status, tools: s.tools })),
     };
   }
 
-  async checkHealth(): Promise<void> {
+  /**
+   * Checks the gateway (model list), then probes the selected model when one is due (see modelHealth.ts) without
+   * waiting for it. `force` is the sidebar's refresh button: probe now unless a probe is already running.
+   */
+  async checkHealth(force = false): Promise<void> {
     const t0 = Date.now();
     try {
       this.models = (await listModels(await this.llmConfig(undefined, false))).filter((m) => isModelAllowed(this.policy, m));
@@ -690,6 +697,30 @@ export class Hub {
       this.health = { ok: false, ms: Date.now() - t0, error: e.message ?? String(e), at: Date.now() };
     }
     this.scheduleRefresh();
+    if (this.health.ok) { void this.checkModel(force); }
+  }
+
+  /** infraonAssistant.modelProbeMinutes; 0 = off. Off in the UI tests, which count the fake gateway's chat requests. */
+  private probeMinutes(): number {
+    const m = this.cfg.get<number>('modelProbeMinutes', 5);
+    return this.e2e || !(m > 0) ? 0 : m;
+  }
+
+  private async checkModel(force: boolean): Promise<void> {
+    const model = this.defaults().model;
+    if (!shouldProbe(this.modelProbe, model, Date.now(), { force, intervalMs: this.probeMinutes() * 60_000 })) { return; }
+    this.modelProbe.inFlight = true;
+    this.scheduleRefresh();
+    try {
+      // The bare streaming call: no retries, no usage count, no sampling extras (probeModel strips them).
+      this.modelProbe.last = await probeModel(streamChatOnce, await this.llmConfig(model, false));
+      if (!this.modelProbe.last.ok) { this.output.appendLine(`[health] ${model} did not answer the probe: ${this.modelProbe.last.error}`); }
+    } catch (e: any) {
+      this.output.appendLine(`[health] model probe skipped: ${e.message ?? e}`);
+    } finally {
+      this.modelProbe.inFlight = false;
+      this.scheduleRefresh();
+    }
   }
 
   async deleteSession(sid: string): Promise<void> {

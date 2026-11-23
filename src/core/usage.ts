@@ -32,9 +32,9 @@ export class UsageTracker {
 
   /** Wraps an LLM function so every call is counted against `sessionId`. */
   wrap(llm: LlmFn, sessionId?: string): LlmFn {
-    return async (cfg, messages, tools, onToken, signal, onToolProgress) => {
+    return async (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => {
       try {
-        const r = await llm(cfg, messages, tools, onToken, signal, onToolProgress);
+        const r = await llm(cfg, messages, tools, onToken, signal, onToolProgress, onEvent);
         this.record(sessionId, r.usage, messages, r.content);
         return r;
       } catch (e: any) {

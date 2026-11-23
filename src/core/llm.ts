@@ -1,3 +1,13 @@
+/**
+ * The OpenAI-compatible LLM client: one streaming /chat/completions call (streamChatOnce) with an idle timeout, the
+ * model list, and withRetry for transient gateway failures. Every model call goes through the LlmFn signature, so
+ * wrappers (retry, sampling fallback, usage counting, secret masking) stack in any order and must pass the optional
+ * callbacks (onToolProgress, onEvent) through unchanged.
+ *
+ * A stall (the gateway accepted the request but sent nothing for the idle timeout) is retried at most once: a backend
+ * that is stuck stays stuck, and three 180 s retries left users looking at "Thinking…" for twelve minutes. Retries are
+ * reported through onEvent so the chat can say what is happening.
+ */
 import * as https from 'https';
 import * as http from 'http';
 import { URL } from 'url';
@@ -34,10 +44,20 @@ export interface StreamResult {
  * agent's status line shows this instead of "Thinking…". `path` is read from the partial arguments once it is complete.
  */
 export interface ToolCallProgress { index: number; name: string; chars: number; path?: string }
-/** Wrappers must pass `onToolProgress` through unchanged; it is optional, so callers that ignore it still work. */
+/**
+ * What happens to a model call besides its content: `receiving` once the first bytes of the reply arrive (the model is
+ * working, even if it only reasons at first), `retry` before a failed attempt is sent again, with a line for the user.
+ */
+export type LlmEvent =
+  | { type: 'receiving' }
+  | { type: 'retry'; attempt: number; of: number; delayMs: number; message: string };
+/**
+ * Wrappers must pass `onToolProgress` and `onEvent` through unchanged; both are optional, so callers that ignore
+ * them still work.
+ */
 export type LlmFn = (
   cfg: LlmConfig, messages: ChatMessage[], tools: ToolSpec[], onToken: (t: string) => void, signal: AbortSignal,
-  onToolProgress?: (p: ToolCallProgress) => void,
+  onToolProgress?: (p: ToolCallProgress) => void, onEvent?: (e: LlmEvent) => void,
 ) => Promise<StreamResult>;
 
 /** Minimum time between two progress reports for one stream, so the UI is not flooded with updates. */
@@ -71,7 +91,7 @@ export function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen
 export const stripUiFields = (messages: ChatMessage[]): Omit<ChatMessage, 'display'>[] =>
   messages.map(({ display: _display, ...m }) => m);
 
-export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal, onToolProgress) => {
+export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => {
   const url = endpoint(cfg, '/chat/completions');
   const payload: Record<string, unknown> = {
     model: cfg.model, messages: stripUiFields(messages), temperature: cfg.temperature, stream: true,
@@ -118,8 +138,13 @@ export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal, onT
       let lastProgress = 0;
       let lastProgressKey = '';
       let buf = '';
+      let receiving = false;
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => {
+        if (!receiving) {
+          receiving = true;
+          try { onEvent?.({ type: 'receiving' }); } catch { /* a UI error must not break the stream */ }
+        }
         buf += chunk;
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
@@ -196,23 +221,51 @@ export const isTransientError = (e: unknown): boolean => {
   return /LLM HTTP (429|502|503|504)\b/.test(m) || /ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|ECONNREFUSED/.test(m);
 };
 
+/** The idle timeout of streamChatOnce fired: the gateway accepted the request (or started a reply) and went silent. */
+export const isStallError = (e: unknown): boolean => /LLM stream stalled/.test(e instanceof Error ? e.message : String(e));
+
+/** The chat line shown before a retry, e.g. "The gateway is not responding; retrying (2/3)…". */
+export function retryNotice(e: unknown, attempt: number, of: number): string {
+  const m = e instanceof Error ? e.message : String(e);
+  const n = `retrying (${attempt}/${of})…`;
+  if (isStallError(e)) {
+    const s = /for (\d+) s/.exec(m);
+    return `The model is not responding${s ? ` (nothing received for ${s[1]} s)` : ''}; ${n}`;
+  }
+  const code = /LLM HTTP (\d{3})/.exec(m)?.[1];
+  if (code === '429') { return `The gateway is busy (HTTP 429); ${n}`; }
+  if (code) { return `The gateway returned HTTP ${code}; ${n}`; }
+  return `The gateway is not responding; ${n}`;
+}
+
 /**
- * Retries transient gateway failures (502/503/504/429, resets) with exponential backoff. It only retries
- * while nothing has been streamed to the user yet, so output is never duplicated.
+ * Retries transient gateway failures (502/503/504/429, resets) with exponential backoff, and a stall at most
+ * `stallRetries` times (default 1): a stuck backend rarely recovers within one idle timeout, let alone three. It
+ * only retries while nothing has been streamed to the user yet, so output is never duplicated. Each retry is
+ * announced through onEvent before the backoff.
  */
-export function withRetry(fn: LlmFn, opts: { retries?: number; baseDelayMs?: number } = {}): LlmFn {
+export function withRetry(fn: LlmFn, opts: { retries?: number; stallRetries?: number; baseDelayMs?: number } = {}): LlmFn {
   const retries = opts.retries ?? 3;
+  const stallRetries = Math.min(opts.stallRetries ?? 1, retries);
   const base = opts.baseDelayMs ?? 800;
-  return async (cfg, messages, tools, onToken, signal, onToolProgress) => {
+  return async (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => {
+    let stalls = 0;
     for (let attempt = 0; ; attempt++) {
       let emitted = false;
       try {
-        return await fn(cfg, messages, tools, (t) => { emitted = true; onToken(t); }, signal, onToolProgress);
+        return await fn(cfg, messages, tools, (t) => { emitted = true; onToken(t); }, signal, onToolProgress, onEvent);
       } catch (e) {
         if (signal.aborted || emitted || attempt >= retries || !isTransientError(e)) { throw e; }
+        const stall = isStallError(e);
+        if (stall && stalls >= stallRetries) { throw e; }
+        if (stall) { stalls++; }
+        const delayMs = base * 2 ** attempt;
+        const [n, of] = stall ? [stalls, stallRetries] : [attempt + 1, retries];
+        try { onEvent?.({ type: 'retry', attempt: n, of, delayMs, message: retryNotice(e, n, of) }); } catch { /* UI only */ }
         await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, base * 2 ** attempt);
-          signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Cancelled')); }, { once: true });
+          const onAbort = () => { clearTimeout(timer); reject(new Error('Cancelled')); };
+          const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, delayMs);
+          signal.addEventListener('abort', onAbort, { once: true });
         });
       }
     }

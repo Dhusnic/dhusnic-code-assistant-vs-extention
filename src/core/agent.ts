@@ -342,7 +342,15 @@ export class Agent {
         this.lastContext = measureContext(system.content ?? '', memory, specs);
         let res: StreamResult;
         try {
-          res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal, (p) => ui.toolWriting?.(p));
+          ui.modelCall?.('waiting');
+          try {
+            res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal, (p) => ui.toolWriting?.(p), (ev) => {
+              if (ev.type === 'receiving') { ui.modelCall?.('receiving'); return; }
+              // A retry is a new request: say why, and wait for its first byte again.
+              ui.info(ev.message);
+              ui.modelCall?.('waiting');
+            });
+          } finally { ui.modelCall?.('done'); }
         } catch (e) {
           // Too long for the model: learn its real limit from the error, shorten the conversation and try again.
           if (!isContextLengthError(e) || overflows >= MAX_OVERFLOW_RETRIES) { throw e; }

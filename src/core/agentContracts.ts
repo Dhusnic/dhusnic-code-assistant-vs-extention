@@ -29,6 +29,12 @@ export interface AgentUi {
   token(t: string): void;
   /** The model is still writing a tool call (e.g. a large write_file): its name, size so far and target path. */
   toolWriting?(p: ToolCallProgress): void;
+  /**
+   * A main-loop model call before its reply: 'waiting' when the request is sent (again after a retry), 'receiving'
+   * at the first byte of the reply, 'done' when the call has ended either way. Lets the UI tell a silent gateway
+   * from a model that is thinking.
+   */
+  modelCall?(phase: 'waiting' | 'receiving' | 'done'): void;
   toolStart(id: string, name: string, kind: ToolKind, args: string, detail: string, preview?: ApprovalPreview): void;
   toolEnd(id: string, ok: boolean, result: string): void;
   approve(req: ApprovalRequest): Promise<boolean>;

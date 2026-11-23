@@ -151,15 +151,15 @@ export function isUnsupportedParamError(e: unknown): boolean {
  */
 export function withSamplingFallback(fn: LlmFn): LlmFn {
   const rejects = new Set<string>();
-  return async (cfg, messages, tools, onToken, signal, onToolProgress) => {
+  return async (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => {
     const key = `${cfg.baseUrl}\n${cfg.model}`;
-    if (rejects.has(key) && hasNonStandard(cfg.sampling)) { return fn({ ...cfg, sampling: withoutNonStandard(cfg.sampling) }, messages, tools, onToken, signal, onToolProgress); }
+    if (rejects.has(key) && hasNonStandard(cfg.sampling)) { return fn({ ...cfg, sampling: withoutNonStandard(cfg.sampling) }, messages, tools, onToken, signal, onToolProgress, onEvent); }
     try {
-      return await fn(cfg, messages, tools, onToken, signal, onToolProgress);
+      return await fn(cfg, messages, tools, onToken, signal, onToolProgress, onEvent);
     } catch (e) {
       if (signal.aborted || !hasNonStandard(cfg.sampling) || !isUnsupportedParamError(e)) { throw e; }
       rejects.add(key);
-      return fn({ ...cfg, sampling: withoutNonStandard(cfg.sampling) }, messages, tools, onToken, signal, onToolProgress);
+      return fn({ ...cfg, sampling: withoutNonStandard(cfg.sampling) }, messages, tools, onToken, signal, onToolProgress, onEvent);
     }
   };
 }

@@ -125,7 +125,7 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
       case '__probeResult': hub.resolveProbe(m.id, m.result); return;
       case '__error': hub.logWebviewError('sidebar', m); return;
       case 'ready': this.refresh(); void hub.checkHealth(); void hub.ensureMcp(); break;
-      case 'refresh': await hub.checkHealth(); this.refresh(); break;
+      case 'refresh': await hub.checkHealth(true); this.refresh(); break;
       case 'newSession': await hub.newSession(); break;
       case 'openSession': await hub.openSession(String(m.id)); break;
       case 'deleteSession': await hub.deleteSession(String(m.id)); break;
