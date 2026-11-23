@@ -185,7 +185,7 @@ export class Agent {
         ? { call: { id: `todo_carry_${Date.now().toString(36)}`, type: 'function' as const, function: { name: TODO_TOOL, arguments: JSON.stringify({ todos }) } }, result: formatTodos(todos) }
         : undefined;
       const res = await compactHistory(pruned, this.turnStarts, async (text) => {
-        const cfg = { ...(await this.deps.getConfig(opts)), temperature: 0.1, maxTokens: 2048 };
+        const cfg = { ...(await this.deps.getConfig(opts)), maxTokens: 2048 };
         const sent: ChatMessage[] = [{ role: 'system', content: SUMMARY_SYSTEM }, { role: 'user', content: text }];
         const out = await this.deps.llm(cfg, sent, [], () => {}, signal);
         ui.spent?.(tokensSpent(out, sent));
@@ -325,7 +325,7 @@ export class Agent {
         // The user may have switched modes during the last step: the next model call and its tools follow the new one.
         this.syncMode(run);
         await this.compact(opts, ui, false);
-        const cfg = { ...(await this.deps.getConfig(opts)), temperature: ep.temperature, maxTokens: ep.maxTokens };
+        const cfg = { ...(await this.deps.getConfig(opts)), maxTokens: ep.maxTokens };
         const memory = (await this.deps.memory?.()) ?? '';
         const system: ChatMessage = {
           role: 'system',

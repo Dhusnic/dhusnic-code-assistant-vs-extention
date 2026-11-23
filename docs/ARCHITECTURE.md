@@ -39,7 +39,7 @@ User types in the session tab (media/session.js)
 | Area | Files |
 |---|---|
 | Agent loop, sub-agents, plan mode | `core/agent.ts` (the loop), `core/agentContracts.ts` (UI, guard and dependency interfaces), `core/agentTools.ts` (built-in tool specs, system prompt), `core/checks.ts` (project checks), `core/agentTypes.ts`, `core/runtime.ts`, `core/notify.ts` |
-| LLM client | `core/llm.ts` (streaming, retry, idle timeout), `core/textToolCalls.ts` (tool calls written as text), `core/modelInfo.ts`, `core/modelRouting.ts`, `core/usage.ts` |
+| LLM client | `core/llm.ts` (streaming, retry, idle timeout), `core/sampling.ts` (sampling per model family), `core/textToolCalls.ts` (tool calls written as text), `core/modelInfo.ts`, `core/modelRouting.ts`, `core/usage.ts` |
 | Tools | `core/tool.ts` (contracts), `core/fstools.ts` (files, search, commands), `core/search.ts` (ripgrep and a built-in fallback), `core/codeSearch.ts` (`search_code`: local BM25 ranking of code regions), `host/vscodeTools.ts` and `host/navTools.ts` (diagnostics, symbols, references) |
 | Safety | `core/permissions.ts`, `core/hooks.ts`, `core/redact.ts` (secret masking), `core/audit.ts`, `core/policy.ts`, `core/centralPolicy.ts`, `host/features/guard.ts` |
 | History and undo | `core/store.ts`, `core/sessions.ts`, `core/checkpoints.ts`, `core/changeJournal.ts`, `core/changes.ts` |

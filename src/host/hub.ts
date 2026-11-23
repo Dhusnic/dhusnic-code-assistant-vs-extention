@@ -13,6 +13,7 @@ import { ModelTask, RoutingConfig, routeModel } from '../core/modelRouting';
 import { parseTeamSources, syncTeamSkills } from '../core/teamSkills';
 import { FsToolsOptions, createFsTools } from '../core/fstools';
 import { LlmConfig, LlmFn, listModels, streamChat } from '../core/llm';
+import { SamplingOverride, resolveSampling, sanitizeOverride } from '../core/sampling';
 import { McpManager, ServerStatus, mcpConfigHash, parseMcpConfig } from '../core/mcp';
 import { filterFiles } from '../core/mentions';
 import { Effort, Mode, isEffort, isMode } from '../core/policy';
@@ -486,8 +487,9 @@ export class Hub {
     const chosen = this.allowedModel(model || this.defaults().model);
     if (!isModelAllowed(this.policy, chosen)) { throw new Error(`Your organization's policy does not allow the model "${chosen}".`); }
     const idle = this.cfg.get<number>('llmIdleTimeoutSeconds', 180);
+    const { temperature, sampling } = resolveSampling(chosen, this.samplingOverride());
     const cfg: LlmConfig = {
-      baseUrl: this.policy.baseUrl ?? this.cfg.get('baseUrl', ''), model: chosen, apiKey, temperature: 0.2,
+      baseUrl: this.policy.baseUrl ?? this.cfg.get('baseUrl', ''), model: chosen, apiKey, temperature, sampling,
       allowSelfSigned: this.policy.allowSelfSignedTls ?? this.cfg.get('allowSelfSignedTls', true),
       idleTimeoutMs: idle > 0 ? idle * 1000 : undefined,
     };
@@ -499,6 +501,16 @@ export class Hub {
     }
     this.lastModel = chosen;
     return cfg;
+  }
+
+  /**
+   * The user's explicit sampling values: the Sampling object, over a Temperature the user actually set (its default
+   * must not hide the model's recommended temperature). Everything else comes from the model's profile.
+   */
+  private samplingOverride(): SamplingOverride {
+    const t = this.cfg.inspect<number>('temperature');
+    const temperature = t?.workspaceFolderValue ?? t?.workspaceValue ?? t?.globalValue;
+    return { ...sanitizeOverride({ temperature }), ...sanitizeOverride(this.cfg.get('sampling')) };
   }
 
   /** The project memory file in use (CLAUDE.md, INFRAON.md or AGENTS.md), shown in the context popup. */

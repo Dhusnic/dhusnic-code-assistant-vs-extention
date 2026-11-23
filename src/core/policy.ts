@@ -20,15 +20,16 @@ export const EFFORT_INFO: Record<Effort, { label: string; description: string }>
   max: { label: 'Max', description: 'Exhaustive, longest-running' },
 };
 
-export interface EffortParams { temperature: number; maxTokens: number; maxIterations: number; hint: string }
+/** Effort sets output tokens, rounds and the prompt hint; sampling is chosen per model family (sampling.ts). */
+export interface EffortParams { maxTokens: number; maxIterations: number; hint: string }
 
 export function effortParams(effort: Effort): EffortParams {
   switch (effort) {
     // Real fix-and-test loops need room: too few rounds stop the agent mid-task, too few tokens cut off large edits.
-    case 'low': return { temperature: 0.1, maxTokens: 4096, maxIterations: 15, hint: 'Be fast and concise. Explore only what is strictly necessary.' };
-    case 'high': return { temperature: 0.2, maxTokens: 16384, maxIterations: 80, hint: 'Explore thoroughly, reason step by step, and verify your changes (run tests or check diagnostics) before finishing.' };
-    case 'max': return { temperature: 0.3, maxTokens: 16384, maxIterations: 120, hint: 'Be exhaustive: investigate broadly, consider edge cases, verify with tests and diagnostics, and re-check your work before finishing.' };
-    default: return { temperature: 0.2, maxTokens: 8192, maxIterations: 50, hint: '' };
+    case 'low': return { maxTokens: 4096, maxIterations: 15, hint: 'Be fast and concise. Explore only what is strictly necessary.' };
+    case 'high': return { maxTokens: 16384, maxIterations: 80, hint: 'Explore thoroughly, reason step by step, and verify your changes (run tests or check diagnostics) before finishing.' };
+    case 'max': return { maxTokens: 16384, maxIterations: 120, hint: 'Be exhaustive: investigate broadly, consider edge cases, verify with tests and diagnostics, and re-check your work before finishing.' };
+    default: return { maxTokens: 8192, maxIterations: 50, hint: '' };
   }
 }
 
