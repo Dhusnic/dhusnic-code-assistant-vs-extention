@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { detectVerifyCommands, formatVerifyCommands, parseVerifySection } from '../core/verify';
+import { detectVerifyCommands, formatVerifyCommands, parseVerifySection, workspaceDirs } from '../core/verify';
 import { tmpDir } from './helpers';
 
 async function repo(files: Record<string, string>): Promise<string> {
@@ -93,4 +93,44 @@ test('broken package.json and empty folders give no commands and never throw', a
 test('formatVerifyCommands', () => {
   assert.equal(formatVerifyCommands([]), '');
   assert.equal(formatVerifyCommands([{ name: 'test', command: 'npm test', timeoutSeconds: 600, source: 'package.json' }]), '- test: `npm test` (from package.json)');
+});
+
+/* ------------------------------------------------------------------ workspace type checks */
+
+async function writeJson(file: string, obj: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(obj));
+}
+
+test('workspaces: each TypeScript package is type-checked when the root has no type check', async () => {
+  const root = await tmpDir('verify-ws-');
+  await writeJson(path.join(root, 'package.json'), { workspaces: ['server', 'client', 'docs'], scripts: { lint: 'eslint .', test: 'npm run test --prefix server' } });
+  await writeJson(path.join(root, 'client', 'package.json'), { devDependencies: { typescript: '^5' } });
+  await writeJson(path.join(root, 'client', 'tsconfig.json'), {});
+  await writeJson(path.join(root, 'server', 'package.json'), { devDependencies: { typescript: '^5' } });
+  await writeJson(path.join(root, 'server', 'tsconfig.json'), {});
+  await writeJson(path.join(root, 'docs', 'package.json'), {});
+  const cmds = await detectVerifyCommands(root);
+  assert.deepEqual(cmds.map((c) => c.command), ['npx tsc --noEmit -p client', 'npx tsc --noEmit -p server', 'npm run lint', 'npm run test']);
+  assert.equal(cmds[0].name, 'typecheck client');
+});
+
+test('workspaces: a root type check wins; globs list package folders; odd patterns are skipped', async () => {
+  const root = await tmpDir('verify-ws2-');
+  await writeJson(path.join(root, 'package.json'), { workspaces: { packages: ['packages/*', '!packages/skip', '../outside', 'apps/{a,b}'] }, scripts: { typecheck: 'tsc -b' } });
+  await writeJson(path.join(root, 'packages', 'one', 'package.json'), {});
+  await writeJson(path.join(root, 'packages', 'two', 'package.json'), {});
+  await fs.mkdir(path.join(root, 'packages', 'not-a-package'), { recursive: true });
+  assert.deepEqual(await workspaceDirs(root, JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'))), ['packages/one', 'packages/two']);
+  const cmds = await detectVerifyCommands(root);
+  assert.deepEqual(cmds.map((c) => c.command), ['npm run typecheck']);
+});
+
+test('workspaces: pnpm-workspace.yaml is read', async () => {
+  const root = await tmpDir('verify-ws3-');
+  await writeJson(path.join(root, 'package.json'), {});
+  await fs.writeFile(path.join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'web'\n  - \"api\" # the API\n");
+  await writeJson(path.join(root, 'web', 'package.json'), {});
+  await writeJson(path.join(root, 'api', 'package.json'), {});
+  assert.deepEqual(await workspaceDirs(root, {}), ['api', 'web']);
 });

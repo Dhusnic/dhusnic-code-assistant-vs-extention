@@ -4,17 +4,18 @@
  * and the solution must not touch the task's protected files. Tasks whose toolchain (task.json "requires") is
  * missing on this machine are skipped, the same way `npm run eval` skips them.
  *
- * Each grade spawns a shell and Node (or Python), so the tasks run concurrently to keep this file fast.
+ * Each grade spawns a shell and Node (or Python), so the tasks run concurrently to keep this file fast, and the file
+ * lives in test/slow/ (run alone by `npm run test:slow`) so that load does not starve timing-sensitive unit tests.
  */
 import { describe, test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { DEFAULT_HISTORY, parseArgs } from '../eval/run';
-import { applySolution, appendHistory, diffTrees, EvalReport, gradeRepo, historyEntry, prepareRepo, protectedChanges } from '../eval/runner';
-import { DIFFICULTIES, EvalTask, findTasksDir, loadTasks, missingToolchains, solutionDir, validateTask } from '../eval/tasks';
-import { tmpDir } from './helpers';
+import { DEFAULT_HISTORY, parseArgs } from '../../eval/run';
+import { applySolution, appendHistory, diffTrees, EvalReport, gradeRepo, historyEntry, prepareRepo, protectedChanges } from '../../eval/runner';
+import { DIFFICULTIES, EvalTask, findTasksDir, loadTasks, missingToolchains, solutionDir, validateTask } from '../../eval/tasks';
+import { tmpDir } from '../helpers';
 
 const TASKS_DIR = findTasksDir(__dirname, process.cwd());
 const loaded = TASKS_DIR ? loadTasks(TASKS_DIR) : { tasks: [] as EvalTask[], errors: ['eval/tasks not found'] };

@@ -29,6 +29,6 @@ eval/tasks/<name>/
 ```
 
 The check (usually `node __grade__.js`) runs in the finished repository with `hidden/` copied in; exit code 0 is a
-pass. `npm run test:unit` includes `src/test/evalTasks.test.ts`, which proves every task is gradable: its check must
+pass. `npm test` (the slow tests: `npm run test:slow`) includes `src/test/slow/evalTasks.test.ts`, which proves every task is gradable: its check must
 fail on the untouched `repo/` and pass once `solution/` is applied. Add a task by creating the four parts above and
 running that test.
