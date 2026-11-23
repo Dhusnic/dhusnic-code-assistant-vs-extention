@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.29.0 - INSTALL OR UPDATE (macOS)
+INFRAON CODE ASSISTANT 0.30.0 - INSTALL OR UPDATE (macOS)
 
 First install
 1. Double-click the zip to extract it.
@@ -27,19 +27,19 @@ What the installer does
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
 
-New in 0.29.0: more reliable, smarter checks
-- The status line shows what is happening: "Waiting for the model... no response for 45 s" while the
-  gateway is silent, and "Writing index.html... 14.2 KB" while a file is being written.
-- The sidebar Status checks that the model really answers ("Gateway up - model not responding").
-- A gateway that stops answering is retried once, with a visible note, instead of minutes of "Thinking...".
-- At Max effort the agent writes a task list before its first change (setting: infraonAssistant.planFirst).
-- Sub-packages (for example a client/ next to a server/) are type-checked after changes, and test
-  runners such as vitest no longer hang in watch mode.
-- Fix rounds run only the related tests first; the full suite still runs before the agent finishes.
-- Repo map uses language-server symbols for Java, C#, Go, Kotlin and PHP.
-- Better inline completions (fill-in-the-middle, context from open tabs and imports).
-- Search by meaning turns on by itself when the gateway serves an embedding model.
-- Cmd+Shift+P -> "Infraon Assistant: Show Edit Statistics" shows local edit success/failure counts.
+New in 0.30.0: built-in skills for Office and PDF files
+- Ask for a Word document, Excel workbook, PowerPoint deck or PDF and the agent creates, reads or
+  edits it, then renders the pages and checks the layout itself (skills: docx, xlsx, pptx, pdf).
+- skill-creator helps you write and test your own skills; import-memory brings your preferences over
+  from ChatGPT or another assistant.
+- These skills use Python, LibreOffice and Node on your machine. Cmd+Shift+P -> "Infraon Assistant:
+  Check Skill Requirements" lists what is missing and how to install it; the agent tells you too.
+- Everything runs locally and through the Infraon gateway only.
+- Turn a skill off with the setting infraonAssistant.disabledBuiltinSkills, or copy it to your own
+  skills (Skills manager) to change it.
+
+New in 0.29.0: more reliable - live status line, model health check, task list at Max effort,
+sub-package type checks, faster fix rounds, better inline completions.
 
 New in 0.28.0: fewer mistakes - errors after each edit are fixed at once, loop detection, self-review
 at High/Max effort, a project map, clearer test failures.

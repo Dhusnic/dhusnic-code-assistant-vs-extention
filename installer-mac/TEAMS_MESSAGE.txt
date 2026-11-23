@@ -1,14 +1,13 @@
 Hi team 👋
 
-Infraon Code Assistant 0.29.0 is out: more reliable, and it checks its own work better 🎯
+Infraon Code Assistant 0.30.0 is out: it now works with Word, Excel, PowerPoint and PDF files 📄📊
 
 🆕 What's new
-• You can see what it's doing: "Waiting for the model… 45 s" when the server is slow, "Writing index.html… 14 KB" while it writes a file
-• Sidebar Status now checks the model really answers, and a stuck server shows a clear message instead of minutes of "Thinking…"
-• At Max effort it writes a task list before changing files, so big tasks are finished properly
-• Type-checks sub-projects too (e.g. client/ and server/), and test runners like vitest no longer hang
-• Faster fix rounds: related tests first, full test suite before it finishes
-• Better inline code completions, and a smarter project map for Java, C#, Go, Kotlin and PHP
+• Ask for a Word doc, Excel sheet, PowerPoint deck or PDF: it creates, reads or edits the file, then renders the pages and checks the layout itself
+• skill-creator: build and test your own reusable skills with the agent
+• import-memory: bring your preferences over from ChatGPT or another assistant
+• These skills use Python, LibreOffice and Node on your PC. Ctrl/Cmd+Shift+P → "Infraon Assistant: Check Skill Requirements" shows what's missing and the install command
+• Everything stays on your machine and our gateway
 • Already on 0.26.0 or later? You don't need the installer: the update installs by itself, just click "Reload Now" when asked (or Ctrl+Shift+P → "Infraon Assistant: Check for Updates")
 
 ⬇️ Download (office network / VPN only)
