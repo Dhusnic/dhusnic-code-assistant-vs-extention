@@ -6,6 +6,7 @@ import { Agent } from '../core/agent';
 import { createFsTools } from '../core/fstools';
 import { CheckpointStore } from '../core/checkpoints';
 import { REVIEW_SYSTEM, SelfReviewSetting, buildReviewDiff, isLgtm, shouldSelfReview } from '../core/selfReview';
+import { Tool, fnSpec } from '../core/tool';
 import { call, fakeLlm, recordingUi, text, tmpDir } from './helpers';
 
 type Effort = 'low' | 'medium' | 'high' | 'max';
@@ -130,4 +131,27 @@ test('buildReviewDiff: without a before-state shows current content; stays withi
   assert.match(out, /more diff lines not shown/);
   assert.match(out, /### small\.txt \(new file, \+1 -0\)\n\+\s+1: hello/);
   assert.match(out, /### gone\.txt \(no longer exists\)/);
+});
+
+test('no review when project checks are still failing after the last allowed fix attempt', async () => {
+  const root = await tmpDir('selfrev-');
+  await fs.writeFile(path.join(root, 'a.ts'), 'one\ntwo\nthree\n');
+  // Low effort allows one fix round; the second check run fails again, so the turn ends with checks unresolved.
+  const editTs = (id: string, from: string, to: string) => call('edit_file', { path: 'a.ts', old_string: from, new_string: to }, id);
+  const s = scripted([call('read_file', { path: 'a.ts' }, 'R1'), editTs('E1', 'two', 'TWO'), text('Done.'), editTs('E2', 'TWO', 'Two'), text('Still done.')], ['1. a.ts:2 issue']);
+  let runs = 0;
+  const run: Tool = {
+    kind: 'exec', spec: fnSpec('run_command', '', {}, []), describe: (a) => `Run: ${a.command}`,
+    run: async () => `Error: broken (run ${++runs})\n[exit 1]`,
+  };
+  const agent = new Agent({
+    root, llm: s.llm.fn, tools: () => [...createFsTools().filter((t) => t.spec.function.name !== 'run_command'), run],
+    getConfig: () => ({ baseUrl: '', apiKey: '', model: 'm', temperature: 0, allowSelfSigned: true }),
+    checks: () => [{ name: 'test', command: 'test-cmd', timeoutSeconds: 60 }],
+    selfReview: () => 'always',
+  });
+  const ui = recordingUi(true);
+  await agent.send('capitalize two', opts('low'), ui);
+  assert.equal(runs, 2, 'checks ran, failed, one fix round, failed again');
+  assert.equal(s.reviewCalls.length, 0, 'the review is skipped while checks are failing');
 });
