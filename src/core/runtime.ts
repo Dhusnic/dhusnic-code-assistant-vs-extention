@@ -539,7 +539,12 @@ export class SessionManager {
 
   async compact(sid: string, aid: string): Promise<void> {
     const rt = this.agent(sid, aid);
-    if (rt.busy) { throw new Error(`${rt.name} is busy.`); }
+    if (rt.busy) {
+      // Mid-turn the history is in use: the turn compacts itself before its next model call.
+      rt.agent.requestCompact();
+      this.uiFor(rt).info("Compaction requested: it runs before the agent's next model call.");
+      return;
+    }
     await rt.agent.compact({ ...rt.settings }, this.uiFor(rt), true);
     await this.persist(rt);
   }

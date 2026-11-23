@@ -20,8 +20,8 @@ import type { Hub } from './hub';
  * One editor tab = one session = one main conversation (Claude-style). Sub-agents launched from it can be watched
  * live in the same tab; any number of tabs can run in parallel.
  */
-/** Slash commands that only show or change settings, so they are fine while the agent works. */
-const SAFE_WHILE_BUSY = new Set(['help', 'mode', 'effort', 'model', 'permissions', 'changes', 'audit', 'history', 'search', 'export', 'skills', 'agents', 'mcp', 'memory', 'schedule']);
+/** Slash commands that are fine while the agent works: they show or change settings, or (compact) wait for a safe point. */
+const SAFE_WHILE_BUSY = new Set(['compact', 'help', 'mode', 'effort', 'model', 'permissions', 'changes', 'audit', 'history', 'search', 'export', 'skills', 'agents', 'mcp', 'memory', 'schedule']);
 
 /** Opens a link from the chat in the default browser. Only web and mail links: the webview's text is untrusted. */
 export async function openLink(raw: unknown): Promise<boolean> {

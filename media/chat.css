@@ -10,7 +10,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #hdr .logo { width: 22px; height: 22px; flex: none; }
 #hdr .title { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-#log { flex: 1; overflow-y: auto; padding: 12px 12px 4px; overflow-anchor: none; }
+#log { flex: 1; overflow-y: auto; padding: 0 12px 4px; overflow-anchor: none; }
 .empty { text-align: center; margin: 8vh 8px 0; opacity: .95; }
 .empty .logo { width: 56px; height: 56px; margin-bottom: 8px; }
 .empty h2 { margin: 4px 0; font-weight: 600; }
@@ -654,3 +654,28 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
   .am-body .am-root::after { display: none; }
   .am-kids { max-height: 56vh; }
 }
+
+/* ---------- turns: the user's message floats at the top of its turn; the agent's work hangs off a timeline ---------- */
+.turn { position: relative; padding-bottom: 4px; }
+.turn > .msg.user:first-child { position: sticky; top: 0; z-index: 3; margin: 12px 0 8px; max-height: 32vh; overflow-y: auto;
+  background: var(--vscode-input-background); box-shadow: 0 6px 10px -6px rgba(0,0,0,.45); }
+.turn > :not(:first-child) { position: relative; margin-left: 22px; }
+/* The rail: each item draws its own stretch, overlapping the gaps so it reads as one line; it ends at the last dot. */
+.turn > :not(:first-child)::before { content: ''; position: absolute; left: -16px; top: -12px; bottom: -12px; width: 0; border-left: 1px solid var(--vscode-panel-border); pointer-events: none; }
+.turn > :nth-child(2)::before { top: 0; }
+.turn > :last-child:not(:first-child)::before { bottom: auto; height: 23px; }
+.turn > :nth-child(2):last-child::before { height: 11px; }
+/* The node: grey for replies and notes, green/red when a tool finishes, pulsing while it runs. */
+.turn > :not(:first-child)::after { content: ''; position: absolute; left: -20px; top: 9px; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box;
+  background: var(--vscode-descriptionForeground, #888); box-shadow: 0 0 0 3px var(--vscode-sideBar-background); pointer-events: none; }
+.turn > .msg.assistant::after { background: var(--vscode-foreground); opacity: .75; }
+.turn > .tool.ok::after { background: var(--vscode-testing-iconPassed, #3fb950); }
+.turn > .tool.fail::after { background: var(--vscode-errorForeground); }
+.turn > .tool.running::after { background: var(--vscode-focusBorder); animation: tl-pulse 1.2s ease-in-out infinite; }
+.turn > .approve::after { background: var(--vscode-editorWarning-foreground, #cca700); }
+.turn > .approve.done::after { background: var(--vscode-descriptionForeground, #888); }
+.turn > .todo-card::after { background: var(--vscode-charts-blue, #3794ff); }
+.turn > .msg.info::after { background: transparent; border: 1px solid var(--vscode-descriptionForeground, #888); }
+.turn > .msg.error::after { background: var(--vscode-errorForeground); border: 0; }
+@keyframes tl-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }
+@media (prefers-reduced-motion: reduce) { .turn > .tool.running::after { animation: none; } }

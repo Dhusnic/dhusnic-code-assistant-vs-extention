@@ -169,6 +169,11 @@ export class Agent {
 
   /** The model's real context limit, learned from a "too long" error (smaller than the configured one). */
   private learnedLimit?: number;
+  /** The user asked to compact while a turn was running: done before the turn's next model call. */
+  private compactRequested = false;
+
+  /** Asks a running turn to compact at its next safe point (before the next model call), not in the middle of a step. */
+  requestCompact(): void { this.compactRequested = true; }
 
   contextUsage(): { used: number; limit: number } {
     const configured = this.deps.contextLimit?.() ?? DEFAULT_CONTEXT;
@@ -346,7 +351,9 @@ export class Agent {
         this.injectQueued(ui);
         // The user may have switched modes during the last step: the next model call and its tools follow the new one.
         this.syncMode(run);
-        await this.compact(opts, ui, false);
+        const forced = this.compactRequested;
+        this.compactRequested = false;
+        await this.compact(opts, ui, forced);
         const cfg = { ...(await this.deps.getConfig(opts)), maxTokens: ep.maxTokens };
         const memory = (await this.deps.memory?.()) ?? '';
         const system: ChatMessage = {

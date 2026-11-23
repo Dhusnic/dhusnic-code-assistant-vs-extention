@@ -167,6 +167,23 @@ test('agent: manual compact(force) works, reports, and is a no-op with a single 
   assert.equal(agent.history.at(-1)!.content, 'B');
 });
 
+test('agent: compact requested mid-turn runs before the next model call of that turn', async () => {
+  let agent!: Agent;
+  const llm = fakeLlm([
+    text('A'),
+    () => { agent.requestCompact(); return call('list_dir', { path: '.' }, 'c1'); },
+    (m) => (isSummarizerCall(m) ? text('S') : text('not the summarizer')),
+    text('done'),
+  ]);
+  agent = agentWith(llm, 100000);
+  const ui = recordingUi();
+  await agent.send('one', OPTS, ui);
+  await agent.send('two', OPTS, ui);
+  assert.ok(llm.calls.some(isSummarizerCall), 'the turn compacted itself');
+  assert.ok(agent.history[0].content!.startsWith(SUMMARY_PREFIX));
+  assert.equal(agent.history.at(-1)!.content, 'done');
+});
+
 test('agent: rewind after compaction lands on the summary instead of corrupting history', async () => {
   const llm = fakeLlm([text('A'), text('B'), (m) => (isSummarizerCall(m) ? text('S') : text('x')), text('C')]);
   const agent = agentWith(llm, 100000);

@@ -217,7 +217,12 @@
 
   /* ================================================================ transcript rendering */
   function clearEmpty() { log.querySelector('.empty')?.remove(); }
-  function add(cls, html) { clearEmpty(); const d = document.createElement('div'); d.className = `msg ${cls}`; d.innerHTML = html; log.appendChild(d); scroll(); return d; }
+  /* Each user message opens a turn group: the message sticks to the top while its turn scrolls (pushed off by the next
+   * one), and what follows it (replies, tools, cards) hangs off a timeline rail. Output before any message goes on the log. */
+  let turnBox = null;
+  const host = () => (turnBox && turnBox.isConnected ? turnBox : log);
+  function openTurn() { clearEmpty(); turnBox = document.createElement('div'); turnBox.className = 'turn'; log.appendChild(turnBox); }
+  function add(cls, html) { clearEmpty(); const d = document.createElement('div'); d.className = `msg ${cls}`; d.innerHTML = html; host().appendChild(d); scroll(); return d; }
   function showEmpty() {
     if (state.viewingSub) { log.innerHTML = '<div class="empty"><p>This agent has not produced any output yet.</p></div>'; return; }
     log.innerHTML = `<div class="empty">${logo}<h2>Infraon Assistant</h2><p>Powered by your company LLM. Your code never leaves the network.</p>
@@ -249,6 +254,7 @@
       d.dataset.turn = m.turn;
       return;
     }
+    openTurn();
     const d = add('user', esc(m.text));
     d.dataset.raw = m.text;   // no force here: send() already jumped; a queued message starting later must not yank a reader
     if (m.thumbs && m.thumbs.length) { d.insertAdjacentHTML('beforeend', `<div class="thumbs">${m.thumbs.map((t) => `<img src="${esc(t)}" alt="screenshot">`).join('')}</div>`); }
@@ -304,7 +310,7 @@
     let card = $('todo-card');
     if (card && sig !== todoSig) { card.remove(); card = null; }   // list or a status changed: show it at the latest point
     todoSig = sig;
-    if (!card) { clearEmpty(); card = document.createElement('div'); card.className = 'todo-card'; card.id = 'todo-card'; log.appendChild(card); cur = null; }
+    if (!card) { clearEmpty(); card = document.createElement('div'); card.className = 'todo-card'; card.id = 'todo-card'; host().appendChild(card); cur = null; }
     const done = items.filter((t) => t.status === 'completed').length;
     const icon = (s) => (s === 'completed' ? '<span class="ti done">✓</span>' : s === 'in_progress' ? (busy ? '<span class="ti run"></span>' : '<span class="ti paused" title="The agent is not running: this step was left in progress"></span>') : '<span class="ti todo"></span>');
     const total = items.reduce((ms, t) => ms + (workedMs(t) ?? 0), 0);
@@ -336,7 +342,7 @@
     const stat = m.diff ? ` <span class="muted">+${m.diff.added} −${m.diff.removed}</span>` : '';
     d.innerHTML = `<summary><span class="status"></span><span class="label">${esc(m.detail || m.name)}${stat}</span></summary>${m.diff ? diffHtml(m.diff) : `<pre>${esc(m.args || '')}</pre>`}`;
     if (m.name === 'agent') { d.open = true; }
-    log.appendChild(d); scroll();
+    host().appendChild(d); scroll();
   }
   function toolEnd(m) {
     const d = $(`t-${m.id}`); if (!d) { return; }
@@ -474,7 +480,9 @@
     const target = log.querySelector(`.msg.user[data-turn="${m.turn}"]`);
     if (target) {
       input.value = target.dataset.raw || ''; autosize();
-      let n = target; while (n) { const next = n.nextElementSibling; n.remove(); n = next; }
+      // The message opens its turn group: drop that group and every later one.
+      let n = target.parentElement && target.parentElement.classList.contains('turn') && target.parentElement.firstElementChild === target ? target.parentElement : target;
+      while (n) { const next = n.nextElementSibling; n.remove(); n = next; }
     }
     add('info', esc(m.note || `Rewound to before this message. ${m.files} file${m.files === 1 ? '' : 's'} restored.`));
     cur = null; input.focus();
