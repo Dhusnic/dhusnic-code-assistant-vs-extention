@@ -7,6 +7,7 @@ import { withFileLock } from './locks';
 import { SKIP_DIRS, filterFiles, globToRegex, hasGlobChars, matchesGlob } from './glob';
 import { EnginePreference, FileIndex, SearchMode, SearchOptions, formatSearch, search } from './search';
 import { CodeIndex, formatCodeHits } from './codeSearch';
+import type { SemanticRanker } from './hybridSearch';
 
 export { SKIP_DIRS, globToRegex, matchesGlob };
 
@@ -308,7 +309,11 @@ function multiOps(args: any): EditOp[] {
   return args.edits;
 }
 
-export interface FsToolsOptions { index?: FileIndex; rgPath?: string; prefer?: EnginePreference }
+export interface FsToolsOptions {
+  index?: FileIndex; rgPath?: string; prefer?: EnginePreference;
+  /** Embedding re-ranking for search_code in a workspace folder (hybridSearch.ts); BM25 only when absent. */
+  semantic?: (root: string) => SemanticRanker | undefined;
+}
 
 const SEARCH_MODES: SearchMode[] = ['content', 'files', 'count'];
 const MAX_GLOB_RESULTS = 200;
@@ -324,7 +329,7 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
   const codeIndexes = new Map<string, CodeIndex>();
   const codeIndexFor = (root: string): CodeIndex => {
     let idx = codeIndexes.get(root);
-    if (!idx) { idx = new CodeIndex(root, indexFor(root)); codeIndexes.set(root, idx); }
+    if (!idx) { idx = new CodeIndex(root, indexFor(root), opts.semantic?.(root)); codeIndexes.set(root, idx); }
     return idx;
   };
   return [

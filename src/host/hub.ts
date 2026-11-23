@@ -38,6 +38,7 @@ import type { Scheduler } from './features/scheduler';
 import { createTerminalRunner } from './features/terminalRunner';
 import { WebService } from './features/web';
 import { TestingService } from './features/testing';
+import { semanticRankerFactory } from './features/semanticSearch';
 
 export const PANEL_TYPE = 'infraonAssistant.session';
 const OTHER_WORKSPACE = 'That session belongs to another workspace. Open it from the VS Code window of that folder.';
@@ -120,7 +121,7 @@ export class Hub {
       void this.loadSkills();
       this.scheduleRefresh();
     });
-    this.fsOptions = { index: this.index };
+    this.fsOptions = { index: this.index, semantic: semanticRankerFactory(this) };
     this.fsTools = createFsTools(this.fsOptions);
     const watcher = vscode.workspace.createFileSystemWatcher('**/*', false, true, false);
     watcher.onDidCreate(() => this.index.invalidate());
