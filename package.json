@@ -310,6 +310,14 @@
                         "description": "Before finishing a request that changed files, the agent has the model review the diff against the request in a fresh conversation (one extra model call) and fixes what it finds. Runs at most once per request.",
                         "order": 0
                     },
+                    "infraonAssistant.planFirst": {
+                        "type": "string",
+                        "enum": ["off", "max", "always"],
+                        "enumDescriptions": ["Never hold edits for a plan.", "At Max effort only (default).", "At every effort level."],
+                        "default": "max",
+                        "description": "Plan before editing: the first time in a request that the agent tries to change a file without having written a task list, that change is held (not run) and the agent is asked to read the files involved and write the plan with todo_write first. Happens at most once per request; questions and read-only work are unaffected; not in plan mode or for sub-agents.",
+                        "order": 0
+                    },
                     "infraonAssistant.autoApprove": {
                         "type": "boolean",
                         "default": false,

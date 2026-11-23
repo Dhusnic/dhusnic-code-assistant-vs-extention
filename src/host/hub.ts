@@ -5,6 +5,7 @@ import * as os from 'os';
 import { Agent, CheckCommand, DELEGATION_TOOLS } from '../core/agent';
 import { detectVerifyCommands } from '../core/verify';
 import { parseSelfReviewSetting } from '../core/selfReview';
+import { parsePlanFirstSetting } from '../core/planFirst';
 import { AgentType, BUILTIN_AGENT_TYPES, loadAgentTypes, toolsForType } from '../core/agentTypes';
 import { NewSkill, Skill, addSkillFile, copySkill, createSkill, deleteSkill, findSkill, lintSkill, loadSkills, setModelInvocation, updateSkill } from '../core/skills';
 import { CheckpointStore } from '../core/checkpoints';
@@ -457,6 +458,7 @@ export class Hub {
       snapshot: (turn, abs) => checkpoints.snapshot(turn, abs),
       restore: (turn) => checkpoints.restore(turn),
       selfReview: sub ? undefined : () => parseSelfReviewSetting(this.cfg.get<string>('selfReview', 'high')),
+      planFirst: sub ? undefined : () => parsePlanFirstSetting(this.cfg.get<string>('planFirst', 'max')),
       original: (turn, abs) => checkpoints.originalIn(turn, abs),
       contextLimit: () => this.contextWindow(),
       compactRatio: () => this.cfg.get<number>('autoCompactThreshold', 0.75),
