@@ -1,0 +1,34 @@
+# Eval tasks
+
+Real coding tasks the agent runs end to end against the LLM gateway, graded by tests it does not see. Use them to
+check that a prompt, setting or model change keeps (or raises) the pass rate before it ships.
+
+## Running
+
+```
+$env:INFRAON_EVAL_BASE_URL = "https://172.16.48.75:30400/v1"
+$env:INFRAON_EVAL_API_KEY  = "<key>"        # never commit it
+$env:INFRAON_EVAL_MODEL    = "qwen3-coder-next"
+npm run eval -- --repeat 3 --history
+```
+
+- `--filter <regex>` runs matching task names only; `--effort low|medium|high|max` sets the effort (default medium).
+- `--repeat N` runs each task N times; the report gives the pass rate per task and overall.
+- `--history` appends one JSON line (date, extension version, model, effort, pass rate, per-task results, repeat
+  count) to `eval/results/history.jsonl`, which git ignores. Compare the line for a release with the previous one.
+- Tasks whose toolchain is missing (`"requires": ["python"]` without Python 3 on PATH) are skipped and listed.
+
+## Task format
+
+```
+eval/tasks/<name>/
+  task.json        name, prompt, check, hiddenTests, difficulty, language, tags, requires, mustNotChange, timeoutSeconds
+  repo/            the starting repository the agent works in
+  hidden/          files copied in only after the agent finishes (graders and hidden tests)
+  solution/        the reference solution: files that replace or add to repo/ (never shown to the agent)
+```
+
+The check (usually `node __grade__.js`) runs in the finished repository with `hidden/` copied in; exit code 0 is a
+pass. `npm run test:unit` includes `src/test/evalTasks.test.ts`, which proves every task is gradable: its check must
+fail on the untouched `repo/` and pass once `solution/` is applied. Add a task by creating the four parts above and
+running that test.

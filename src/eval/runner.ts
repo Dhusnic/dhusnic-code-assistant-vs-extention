@@ -1,3 +1,12 @@
+/**
+ * Runs eval tasks against an LLM with the extension's real agent and grades each run.
+ *
+ * Every run works in a fresh temp copy of the task's repo/ (prepareRepo), so runs never see each other's changes.
+ * Grading (gradeRepo) copies the hidden tests in only after the agent has finished, then runs the task's check;
+ * a run also fails when it touched a mustNotChange file. applySolution exists for the offline validator test,
+ * which proves every task fails untouched and passes with its reference solution. historyEntry/appendHistory
+ * write the one-line-per-suite-run history used to compare pass rates across releases.
+ */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -7,7 +16,7 @@ import { matchesGlob } from '../core/glob';
 import { LlmConfig, LlmFn } from '../core/llm';
 import { Effort } from '../core/policy';
 import { detectVerifyCommands } from '../core/verify';
-import { DEFAULT_TASK_TIMEOUT_S, EvalTask } from './tasks';
+import { DEFAULT_TASK_TIMEOUT_S, EvalTask, solutionDir } from './tasks';
 
 export interface EvalOptions {
   tasks: EvalTask[];
@@ -89,6 +98,30 @@ export function prepareRepo(task: EvalTask, dest: string): void {
   for (const rel of task.crlf ?? []) {
     const f = path.join(dest, rel);
     fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'));
+  }
+}
+
+/** In a solution folder: the files the solution deletes, one repository-relative path per line ("#" starts a comment). */
+export const SOLUTION_DELETE_FILE = '__delete__.txt';
+
+/**
+ * Applies the task's reference solution to a prepared repository: every file in solution/ is copied over the
+ * repository (same relative path), then the paths listed in solution/__delete__.txt are removed, then the task's
+ * crlf files are converted to CRLF again so a solution keeps the line endings the agent was given.
+ * Used by the task validator test to prove that each task can pass; the agent never sees solution/.
+ */
+export function applySolution(task: EvalTask, dest: string): void {
+  const dir = solutionDir(task);
+  if (!dir) { throw new Error(`task ${task.name} has no reference solution`); }
+  fs.cpSync(dir, dest, { recursive: true, force: true, filter: (src) => path.basename(src) !== SOLUTION_DELETE_FILE });
+  const del = readOr(path.join(dir, SOLUTION_DELETE_FILE));
+  for (const line of del ? del.toString('utf8').split(/\r?\n/) : []) {
+    const rel = line.trim();
+    if (rel && !rel.startsWith('#')) { fs.rmSync(path.join(dest, rel), { recursive: true, force: true }); }
+  }
+  for (const rel of task.crlf ?? []) {
+    const f = path.join(dest, rel);
+    if (fs.existsSync(f)) { fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')); }
   }
 }
 
@@ -210,4 +243,46 @@ export function formatReport(rep: EvalReport): string {
   const s = rep.summary;
   return [line(rows[0]), widths.map((w) => '-'.repeat(w)).join('  '), ...rows.slice(1).map(line), '',
     `Overall: ${s.passed}/${s.runs} runs passed (${(s.passRate * 100).toFixed(0)}%) — model ${rep.model}, effort ${rep.effort}`].join('\n');
+}
+
+/** One line of the results history (eval/results/history.jsonl): enough to compare pass rates across releases. */
+export interface HistoryEntry {
+  date: string;
+  version: string;
+  model: string;
+  effort: Effort;
+  repeat: number;
+  tasks: number;
+  runs: number;
+  passed: number;
+  passRate: number;
+  /** Pass counts per difficulty ("unrated" for tasks without one). */
+  byDifficulty: Record<string, { passed: number; runs: number }>;
+  perTask: Record<string, { passed: number; runs: number }>;
+  /** Tasks left out because a toolchain they need is missing on this machine. */
+  skipped: string[];
+}
+
+export function historyEntry(rep: EvalReport, tasks: EvalTask[], version: string, skipped: string[] = []): HistoryEntry {
+  const difficulty = new Map(tasks.map((t) => [t.name, t.difficulty ?? 'unrated']));
+  const byDifficulty: Record<string, { passed: number; runs: number }> = {};
+  for (const [name, t] of Object.entries(rep.summary.perTask)) {
+    const d = (byDifficulty[difficulty.get(name) ?? 'unrated'] ??= { passed: 0, runs: 0 });
+    d.passed += t.passed;
+    d.runs += t.runs;
+  }
+  const s = rep.summary;
+  return {
+    date: rep.startedAt, version, model: rep.model, effort: rep.effort, repeat: rep.repeat,
+    tasks: s.tasks, runs: s.runs, passed: s.passed, passRate: Math.round(s.passRate * 10000) / 10000,
+    byDifficulty, perTask: s.perTask, skipped,
+  };
+}
+
+/** Appends one JSON line to the history file, creating its folder with a .gitignore so results stay local. */
+export function appendHistory(file: string, entry: HistoryEntry): void {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(path.join(dir, '.gitignore'))) { fs.writeFileSync(path.join(dir, '.gitignore'), '*\n'); }
+  fs.appendFileSync(file, `${JSON.stringify(entry)}\n`);
 }

@@ -1,0 +1,11 @@
+{
+    "name": "async-foreach",
+    "prompt": "test/loader.test.js fails: loadAll in src/loader.js returns before the items are loaded. Fix it so the tests pass. Items must come back in the order of the ids even when later fetches finish first, fetches should still run concurrently, and if any fetch fails loadAll must reject with that error.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "mustNotChange": ["test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "failing-test", "async"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

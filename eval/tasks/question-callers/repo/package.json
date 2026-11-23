@@ -1,0 +1,8 @@
+{
+    "name": "shop-backend",
+    "version": "9.4.0",
+    "private": true,
+    "scripts": {
+        "test": "node --test"
+    }
+}

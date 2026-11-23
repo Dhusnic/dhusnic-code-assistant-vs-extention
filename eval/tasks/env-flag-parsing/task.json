@@ -1,0 +1,10 @@
+{
+    "name": "env-flag-parsing",
+    "prompt": "Setting FEATURE_BETA=false in the environment still turns the beta features on. Fix flag() in src/env.js: it must accept true/false, 1/0, yes/no and on/off in any letter case, ignoring surrounding whitespace. An unset or empty variable returns the fallback. Any other value throws an Error whose message names the variable.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "config", "hidden-tests"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

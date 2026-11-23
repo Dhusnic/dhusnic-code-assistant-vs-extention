@@ -1,0 +1,10 @@
+{
+    "name": "path-traversal",
+    "prompt": "Security review: resolveInside in src/files.js can be tricked into serving files outside the storage root (for example a root of /srv/data accepts /srv/data2/secret, and '..' segments are not handled safely). Fix it: return the absolute, normalized path only when it is the root itself or inside it; otherwise throw an Error with code 'EOUTSIDE'. It must work with both Windows and POSIX paths on the machine it runs on.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "security", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

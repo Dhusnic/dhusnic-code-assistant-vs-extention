@@ -1,0 +1,10 @@
+{
+    "name": "rate-limiter",
+    "prompt": "Implement createLimiter in src/rateLimit.js (it currently throws 'not implemented'). It is a sliding-window limiter: createLimiter({ limit, windowMs, now = Date.now }) returns { allow(key), remaining(key), reset(key) }. allow(key) returns true and records the request when fewer than `limit` allowed requests for that key happened in the last windowMs milliseconds (a request made at time t counts while now() - t < windowMs); otherwise it returns false and records nothing. remaining(key) is how many more requests would be allowed right now. reset(key) forgets the key. Keys are independent. src/middleware.js already uses it.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["feature", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

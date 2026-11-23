@@ -1,0 +1,10 @@
+{
+    "name": "add-months-clamp",
+    "prompt": "Customers billed on the 31st get their next invoice dated in the wrong month: addMonths(Jan 31, 1) returns March 2 instead of February 29 (in 2024). Fix addMonths in src/dates.js: when the target month is shorter, clamp to its last day. It must keep the time of day, work for negative n and across years, and must not modify the date passed in.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "hidden-tests", "dates"],
+    "difficulty": "medium",
+    "language": "javascript"
+}
