@@ -184,6 +184,7 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
 .hdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #888; }
 .hdot.ok { background: var(--vscode-charts-green, #3fb950); }
 .hdot.bad { background: var(--vscode-errorForeground); }
+.hdot.warn { background: var(--vscode-editorWarning-foreground, #cca700); }
 .err { font-size: 11.5px; color: var(--vscode-errorForeground); margin: 2px 0 6px; word-break: break-word; }
 .warn { color: var(--vscode-editorWarning-foreground, #cca700); }
 .bad { color: var(--vscode-errorForeground); }

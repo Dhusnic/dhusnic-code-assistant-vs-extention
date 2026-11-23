@@ -231,7 +231,14 @@
                     "infraonAssistant.llmIdleTimeoutSeconds": {
                         "type": "number",
                         "default": 180,
-                        "description": "End an LLM request when the gateway sends nothing for this many seconds (including the wait for the first token, which is long for very large prompts). It is retried automatically when nothing was shown yet. 0 uses the default (180).",
+                        "description": "End an LLM request when the gateway sends nothing for this many seconds (including the wait for the first token, which is long for very large prompts). Such a stall is retried once when nothing was shown yet. 0 uses the default (180).",
+                        "order": 4
+                    },
+                    "infraonAssistant.modelProbeMinutes": {
+                        "type": "number",
+                        "default": 5,
+                        "minimum": 0,
+                        "description": "How often the sidebar's Status line tests the selected model with a one-token request, so a model that no longer answers is shown as \"model not responding\" even while the gateway lists it. The refresh button tests it at once. 0 turns the test off.",
                         "order": 4
                     },
                     "infraonAssistant.temperature": {

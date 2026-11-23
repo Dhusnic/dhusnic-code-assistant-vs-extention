@@ -34,8 +34,9 @@
   function renderLlm() {
     const l = data.llm; if (!l) { return; }
     const h = l.health || {};
-    const dot = h.ok === undefined ? 'unknown' : h.ok ? 'ok' : 'bad';
-    const healthText = h.ok === undefined ? 'checking…' : h.ok ? `Online · ${h.ms} ms` : 'Offline';
+    // state/label come from core/modelHealth.ts: the model list and a probe of the selected model.
+    const dot = h.state === 'degraded' ? 'warn' : h.ok === undefined ? 'unknown' : h.ok ? 'ok' : 'bad';
+    const healthText = h.label || (h.ok === undefined ? 'checking…' : h.ok ? `Online · ${h.ms} ms` : 'Offline');
     const u = l.usage, max = Math.max(1, ...u.days.map((d) => d.prompt + d.completion));
     const bars = u.days.map((d) => {
       const tot = d.prompt + d.completion;
@@ -46,6 +47,7 @@
       <div class="kv"><span>Endpoint</span><b title="${esc(l.endpoint)}">${esc(l.endpoint || 'not set')}</b></div>
       <div class="kv"><span>Status</span><b><span class="hdot ${dot}"></span>${healthText}</b></div>
       ${h.ok === false ? `<div class="err">${esc(h.error || '')} <a href="#" id="keyLink">Set API key</a></div>` : ''}
+      ${h.state === 'degraded' ? `<div class="err">The gateway answers, but ${esc(l.model)} did not reply to a test request${h.modelError ? ` (${esc(h.modelError)})` : ''}. Chats will wait or fail until it recovers.</div>` : ''}
       <div class="kv"><span>Model</span><select id="modelSel">${(l.models.length ? l.models : [l.model]).map((m) => `<option${m === l.model ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
       <div class="kv"><span>Context</span><b>${k(l.contextWindow)} tokens</b></div>
       <div class="kv"><span>Agents</span><b>${l.running} running${l.queued ? ` · ${l.queued} queued` : ''} / limit ${l.maxConcurrent}</b></div>
