@@ -8,8 +8,11 @@ param(
     # Clients must reload (modal prompt) instead of being allowed to postpone.
     [switch]$Mandatory
 )
-# Tests -> package -> install into the local VS Code. Reload the VS Code window afterwards to load the new build.
+# Tests -> live gateway check -> package -> install into the local VS Code. Reload the VS Code window afterwards to load the new build.
 # With -Publish: also signs the package and copies it, then latest.json, to the update server.
+# Live gateway check: when INFRAON_LIVE_API_KEY is set, `npm run test:live` runs against the real gateway (settings in
+# src/test/live/llm.live.test.ts) and a failure stops the release. Without the key it is skipped with a warning.
+# The key is only tested for presence here, never printed.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
@@ -24,6 +27,13 @@ if ($LASTEXITCODE -ne 0) { throw 'tests failed - not deploying' }
 # Slow tests (they start many processes) run on their own so timing-sensitive tests are not starved.
 node --test --test-concurrency=1 "out/test/slow/*.test.js"
 if ($LASTEXITCODE -ne 0) { throw 'tests failed - not deploying' }
+if ([string]::IsNullOrWhiteSpace($env:INFRAON_LIVE_API_KEY)) {
+    Write-Warning 'INFRAON_LIVE_API_KEY is not set: the live gateway check (npm run test:live) was SKIPPED. Set it to verify the real gateway before releasing.'
+} else {
+    Write-Host 'Running the live gateway check (npm run test:live)...'
+    npm run test:live
+    if ($LASTEXITCODE -ne 0) { throw 'live gateway check failed - not deploying' }
+}
 
 Get-ChildItem *.vsix -ErrorAction SilentlyContinue | Remove-Item -Force
 # vsce prints advice (e.g. about bundling) on stderr; only its exit code decides success.

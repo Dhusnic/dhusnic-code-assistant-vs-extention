@@ -25,6 +25,7 @@ import { DEFAULT_PROMPT_TOKENS, RepoMaps, repoMapTool } from '../core/repoMap';
 import { SessionStore2, StoredSessionSummary } from '../core/store';
 import { ScopeContext, SessionScope, workspaceKey } from '../core/workspaceScope';
 import { UsageTracker } from '../core/usage';
+import { EditStats, formatEditStats } from '../core/editStats';
 import { DiffContentProvider } from './diffProvider';
 import { SessionPanel } from './sessionPanel';
 import { createVsCodeTools } from './vscodeTools';
@@ -65,6 +66,8 @@ export class Hub {
   private readonly repoMapTool = repoMapTool(this.repoMaps);
   private fsTools: ReturnType<typeof createFsTools>;
   private mcp: McpManager;
+  /** Local counts of edit tool outcomes for this window (command "Show Edit Statistics"); never sent anywhere. */
+  readonly editStats = new EditStats();
   private readonly editDiagnostics = createEditDiagnostics(() => this.cfg.get<boolean>('diagnosticsAfterEdit', true));
   private mcpLoaded = false;
   private mcpErrors: string[] = [];
@@ -436,6 +439,13 @@ export class Hub {
     return this.repoMaps.promptSection(root, { budgetTokens: this.cfg.get<number>('repoMap.maxTokens', DEFAULT_PROMPT_TOKENS) });
   }
 
+  /** Prints the edit statistics (counts, reason codes, model ids, extensions only) to the output channel. */
+  showEditStats(): void {
+    this.output.appendLine('');
+    this.output.appendLine(formatEditStats(this.editStats.snapshot()));
+    this.output.show(true);
+  }
+
   /** All workspace folders (multi-root workspaces have several). */
   workspaceRoots(): WorkspaceRoot[] {
     return (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, path: f.uri.fsPath }));
@@ -465,6 +475,7 @@ export class Hub {
       fileChanges: root === this.root ? this.journal : undefined,
       roots: root === this.root ? () => this.workspaceRoots() : undefined,
       diagnostics: this.editDiagnostics,
+      editStats: this.editStats,
       limits: () => ({ maxIterations: this.cfg.get<number>('maxIterations', 1200), maxTokens: this.cfg.get<number>('maxOutputTokens', 0) }),
       snapshot: (turn, abs) => checkpoints.snapshot(turn, abs),
       restore: (turn) => checkpoints.restore(turn),

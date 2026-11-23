@@ -2,15 +2,18 @@
  * The semantic half of search_code: ranks code chunks by embedding similarity and fuses that with the BM25 ranking
  * of codeSearch.ts, so "login handler" also finds authenticateUser() even though no word matches.
  *
- * Optional and off by default: it runs only when the host's embedder() returns a model (the
- * infraonAssistant.embeddingModel setting). Embeddings come from the same company gateway as chat (embeddings.ts);
- * chunk text is passed through the host's redact() (secret masking when redactSecrets is on) before it is sent.
+ * Optional: it runs only when the host's embedder() returns a model (the infraonAssistant.embeddingModel setting;
+ * its default "auto" resolves to a model only when the gateway's /models list has an embedding model, otherwise
+ * embedder() returns undefined without any request and search_code stays BM25-only). Embeddings come from the same
+ * company gateway as chat (embeddings.ts); chunk text is passed through the host's redact() (secret masking when
+ * redactSecrets is on) before it is sent.
  *
  * Index lifecycle. Vectors are built lazily from the chunks CodeIndex already has; nothing happens until the first
  * search_code call. On a query, the query is embedded together with the top BM25 candidates that have no vector yet
  * (or every chunk, when few are missing), so the first answer is already hybrid. Then a background run embeds the
- * remaining chunks in groups, capped at MAX_CHUNKS chunks, a per-run time limit and a per-session input budget; later
- * queries use whatever vectors exist by then. A chunk's vector is found through its link (path + start line → file
+ * remaining chunks in groups, capped at MAX_CHUNKS chunks, a per-run time limit and a per-session input budget, with a
+ * short pause between groups so one window never keeps the shared gateway busy back to back; later queries use
+ * whatever vectors exist by then. A chunk's vector is found through its link (path + start line → file
  * stamp (mtime:size) + content hash). When a file changes its stamp no longer matches, so its chunks are re-read and
  * re-hashed; unchanged chunk text maps to the same hash and reuses its vector without a request. The content hash
  * includes the model id, so switching models never mixes vector spaces.
@@ -72,6 +75,8 @@ export interface HybridOptions {
   backgroundMs?: number;
   /** Chunks embedded per background step. */
   groupSize?: number;
+  /** Pause between background steps, so the shared gateway is not kept busy back to back. */
+  groupPauseMs?: number;
   maxFailures?: number;
   /** Pause after a transient failure, multiplied by the number of failures in a row. */
   pauseMs?: number;
@@ -125,6 +130,16 @@ export function rrfFuse<T>(lists: T[][], key: (t: T) => string, k = RRF_K): Arra
 
 const NEVER = new AbortController().signal;
 
+/** Waits ms, or rejects at once when signal aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new Error('Cancelled')); return; }
+    const onAbort = () => { clearTimeout(timer); reject(new Error('Cancelled')); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /** Embedding vectors of one workspace folder's chunks, built lazily and fused with BM25 at query time. */
 export class HybridRanker implements SemanticRanker {
   private links = new Map<string, { stamp: string; hash: string }>();
@@ -148,7 +163,7 @@ export class HybridRanker implements SemanticRanker {
   constructor(readonly root: string, opts: HybridOptions) {
     this.o = {
       immediate: 48, smallIndex: 256, maxChunks: MAX_CHUNKS, budget: 60_000, backgroundMs: 10 * 60_000, groupSize: 256,
-      maxFailures: 3, pauseMs: 60_000, ...opts,
+      groupPauseMs: 1000, maxFailures: 3, pauseMs: 60_000, ...opts,
     };
   }
 
@@ -278,6 +293,7 @@ export class HybridRanker implements SemanticRanker {
   private async background(): Promise<void> {
     const deadline = Date.now() + this.o.backgroundMs;
     const signal = this.stop.signal;
+    let first = true;
     while (!signal.aborted && !this.off && Date.now() < deadline && this.sent < this.o.budget && this.links.size < this.o.maxChunks) {
       const emb = this.emb!;
       if (emb.model !== this.model) { break; }
@@ -288,6 +304,10 @@ export class HybridRanker implements SemanticRanker {
         if (!this.vecOf(c) && !this.skip.has(`${chunkKey(c)}@${c.stamp}`)) { pending.push(c); }
       }
       if (!pending.length) { break; }
+      if (!first && this.o.groupPauseMs > 0) {
+        try { await pause(this.o.groupPauseMs, signal); } catch { break; }
+      }
+      first = false;
       try { await this.ensure(pending, emb, signal); } catch (e) { this.fail(e); break; }
       if (this.dirty >= SAVE_EVERY) { await this.save(); }
     }

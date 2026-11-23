@@ -1,9 +1,11 @@
 /**
  * Wires the optional hybrid ranking of search_code (core/hybridSearch.ts) to VS Code.
  *
- * - Model: infraonAssistant.embeddingModel. Empty (the default) keeps search_code BM25-only and sends nothing;
- *   "auto" picks an embedding model from the /models list the hub already fetched; any other value is the model id.
- *   The model must pass the central policy's model allow-list like any chat model.
+ * - Model: infraonAssistant.embeddingModel. "auto" (the default) picks an embedding model from the /models list the
+ *   hub already fetched for its health check; it never probes the gateway itself, so when no listed id mentions
+ *   "embed" every search_code stays BM25-only and sends nothing (the check is a lookup in that list, no request).
+ *   Empty turns it off; any other value is the model id. The model must pass the central policy's model allow-list
+ *   like any chat model.
  * - Endpoint and credentials: the hub's llmConfig() (policy/setting baseUrl, the API key from SecretStorage, the TLS
  *   setting), so embeddings go only to the company gateway. llmConfig is asked never to prompt: no key, no hybrid.
  * - Secrets: chunk text is masked with the same detectors and known secrets as chat when redactSecrets is on
@@ -35,7 +37,7 @@ const VAULT_ID = 'search-index';
 /** A factory for FsToolsOptions.semantic: one HybridRanker per workspace folder. */
 export function semanticRankerFactory(host: SemanticSearchHost): (root: string) => HybridRanker {
   const embedder = async (): Promise<Embedder | undefined> => {
-    const model = resolveEmbeddingModel(host.cfg.get<string>('embeddingModel', ''), host.models);
+    const model = resolveEmbeddingModel(host.cfg.get<string>('embeddingModel', 'auto'), host.models);
     if (!model || !isModelAllowed(host.policy, model)) { return undefined; }
     let cfg: LlmConfig;
     try { cfg = await host.llmConfig(undefined, false); } catch { return undefined; }
