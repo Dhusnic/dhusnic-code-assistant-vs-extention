@@ -33,11 +33,11 @@ export type LlmFn = (
   cfg: LlmConfig, messages: ChatMessage[], tools: ToolSpec[], onToken: (t: string) => void, signal: AbortSignal,
 ) => Promise<StreamResult>;
 
-function endpoint(cfg: LlmConfig, suffix: string): URL {
+export function endpoint(cfg: LlmConfig, suffix: string): URL {
   return new URL(`${cfg.baseUrl.replace(/\/+$/, '')}${suffix}`);
 }
 
-function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen: number): https.RequestOptions {
+export function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen: number): https.RequestOptions {
   const isHttps = url.protocol === 'https:';
   return {
     method, hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname + url.search,

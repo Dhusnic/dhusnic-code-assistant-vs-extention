@@ -4,12 +4,17 @@
  * of ~40 lines. Identifiers are split into words (getUserName → get user name, MAX_RETRY_COUNT → max retry count),
  * and words in the file path count extra, so "session cleanup" finds sessionCleaner.ts and cleanupExpiredSessions().
  *
- * Entirely local: no embeddings model, no network, nothing written to disk. The index is built in memory on the first
- * query and refreshed incrementally: later queries re-read only files whose size or modification time changed.
+ * BM25 itself is entirely local: no network, nothing written to disk. The index is built in memory on the first query
+ * and refreshed incrementally: later queries re-read only files whose size or modification time changed.
+ *
+ * Optionally a SemanticRanker (hybridSearch.ts, given by the host when an embedding model is configured) re-ranks the
+ * results by fusing BM25 with embedding similarity. Without one, or whenever it declines (returns undefined), the
+ * ranking is plain BM25 exactly as described above. Hybrid results are marked in the tool output.
  */
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { FileIndex, NON_TEXT_EXT } from './search';
+import { ChunkRef, SemanticRanker, fileStamp } from './hybridSearch';
 
 const CHUNK_LINES = 40;
 const CHUNK_OVERLAP = 10;
@@ -57,10 +62,14 @@ export function codeTokens(text: string, query = false): string[] {
   return out;
 }
 
-interface Chunk { file: string; start: number; end: number; terms: Map<string, number>; length: number }
+interface Chunk extends ChunkRef { terms: Map<string, number>; length: number }
 interface FileEntry { mtimeMs: number; size: number; chunks: Chunk[] }
 
-export interface CodeHit { file: string; start: number; end: number; score: number; snippet: string[] }
+export interface CodeHit {
+  file: string; start: number; end: number; score: number; snippet: string[];
+  /** Ranked by BM25 fused with embedding similarity. */
+  hybrid?: boolean;
+}
 
 function skipFile(rel: string): boolean {
   if (SKIP_NAME.test(rel)) { return true; }
@@ -70,7 +79,7 @@ function skipFile(rel: string): boolean {
   return SKIP_EXT.has(base.slice(base.lastIndexOf('.') + 1)) || SKIP_EXT.has(base.slice(dot + 1));
 }
 
-function chunkFile(file: string, text: string): Chunk[] {
+function chunkFile(file: string, text: string, stamp: string): Chunk[] {
   if (text.includes('\u0000')) { return []; } // binary
   const lines = text.split(/\r?\n/);
   const pathTerms = codeTokens(file.replace(/[/\\._-]/g, ' '));
@@ -81,7 +90,7 @@ function chunkFile(file: string, text: string): Chunk[] {
     let length = 0;
     for (const t of codeTokens(lines.slice(start, end).join('\n'))) { terms.set(t, (terms.get(t) ?? 0) + 1); length++; }
     for (const t of pathTerms) { terms.set(t, (terms.get(t) ?? 0) + PATH_WEIGHT); length += PATH_WEIGHT; }
-    if (length) { chunks.push({ file, start: start + 1, end, terms, length }); }
+    if (length) { chunks.push({ file, start: start + 1, end, stamp, terms, length }); }
     if (end === lines.length) { break; }
   }
   return chunks;
@@ -101,7 +110,7 @@ export class CodeIndex {
   /** Set when the folder has more indexable files than MAX_FILES; the rest are not searched. */
   truncated = false;
 
-  constructor(readonly root: string, private fileIndex: FileIndex = new FileIndex(root)) {}
+  constructor(readonly root: string, private fileIndex: FileIndex = new FileIndex(root), private ranker?: SemanticRanker) {}
 
   /** Brings the index up to date with the folder: new and changed files are (re)read, deleted ones dropped. */
   refresh(signal?: AbortSignal): Promise<void> {
@@ -121,7 +130,7 @@ export class CodeIndex {
         const st = await fs.stat(abs);
         const old = this.files.get(rel);
         if (old && old.mtimeMs === st.mtimeMs && old.size === st.size) { return; }
-        const chunks = st.size > MAX_FILE_BYTES ? [] : chunkFile(rel, await fs.readFile(abs, 'utf8'));
+        const chunks = st.size > MAX_FILE_BYTES ? [] : chunkFile(rel, await fs.readFile(abs, 'utf8'), fileStamp(st));
         this.files.set(rel, { mtimeMs: st.mtimeMs, size: st.size, chunks });
       } catch { this.files.delete(rel); }
     }, signal);
@@ -154,15 +163,22 @@ export class CodeIndex {
       if (score > 0) { scored.push({ c, score: score * (0.5 + 0.5 * matched / qTerms.length) }); }
     }
     scored.sort((a, b) => b.score - a.score);
+    let ranked = scored;
+    let hybrid = false;
+    if (this.ranker) {
+      const all = [...this.files.values()].flatMap((e) => e.chunks);
+      const fused = await this.ranker.rank({ query, bm25: scored.map((s) => s.c), scope: chunks, all, signal: o.signal }).catch(() => undefined);
+      if (fused) { ranked = fused.map((f) => ({ c: f.item, score: f.score })); hybrid = true; }
+    }
     const max = Math.max(1, Math.min(o.max ?? 8, 30));
     const picked: Array<{ c: Chunk; score: number }> = [];
-    for (const s of scored) {
+    for (const s of ranked) {
       // Overlapping chunks of the same file are one result.
       if (picked.some((p) => p.c.file === s.c.file && s.c.start <= p.c.end && p.c.start <= s.c.end)) { continue; }
       picked.push(s);
       if (picked.length >= max) { break; }
     }
-    return Promise.all(picked.map(async ({ c, score }) => ({ file: c.file, start: c.start, end: c.end, score, snippet: await this.snippet(c, qTerms) })));
+    return Promise.all(picked.map(async ({ c, score }) => ({ file: c.file, start: c.start, end: c.end, score, snippet: await this.snippet(c, qTerms), ...(hybrid ? { hybrid } : {}) })));
   }
 
   /** The lines of the chunk that hold the query's words, with line numbers; the chunk's start when none do. */
@@ -179,5 +195,5 @@ export class CodeIndex {
 export function formatCodeHits(hits: CodeHit[], query: string, truncated: boolean, filePrefix = ''): string {
   if (!hits.length) { return `(no code matched "${query}". Try other words for the same idea, or grep for an exact identifier.)`; }
   const body = hits.map((h, n) => `${n + 1}. ${filePrefix}${h.file}:${h.start}-${h.end}\n${h.snippet.join('\n')}`).join('\n\n');
-  return `${body}${truncated ? `\n\n[Only the first ${MAX_FILES} files of this folder are indexed; pass path to search a sub-folder.]` : ''}\n\n[Ranked by word relevance, not exact text. Read the ranges you need with read_file before relying on them.]`;
+  return `${body}${truncated ? `\n\n[Only the first ${MAX_FILES} files of this folder are indexed; pass path to search a sub-folder.]` : ''}\n\n[Ranked by ${hits.some((h) => h.hybrid) ? 'word relevance and meaning (hybrid)' : 'word relevance'}, not exact text. Read the ranges you need with read_file before relying on them.]`;
 }

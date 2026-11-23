@@ -344,6 +344,12 @@
                         "description": "Engine used by the code-search tool.",
                         "order": 4
                     },
+                    "infraonAssistant.embeddingModel": {
+                        "type": "string",
+                        "default": "",
+                        "markdownDescription": "Embedding model on the company gateway (`{baseUrl}/embeddings`) used to rank `search_code` results by meaning as well as words (hybrid search). Empty = off: word ranking only, nothing is sent. `auto` = the first model listed by the gateway whose id contains \"embed\". Code chunks are masked like chat when `redactSecrets` is on; vectors are cached in the extension's storage, never in the workspace.",
+                        "order": 4
+                    },
                     "infraonAssistant.maxConcurrentAgents": {
                         "type": "number",
                         "default": 4,
