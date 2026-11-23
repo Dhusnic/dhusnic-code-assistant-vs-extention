@@ -9,7 +9,7 @@ import { AgentType, DEFAULT_AGENT_TYPE } from './agentTypes';
 import { MAX_OPTIONS, MAX_QUESTIONS } from './questions';
 import { MAX_TODOS } from './todos';
 import { Effort, Mode, effortParams } from './policy';
-import { BASE_PROMPT, FANOUT_PROMPT, environmentSection } from './prompts';
+import { BASE_PROMPT, FANOUT_PROMPT, PLAN_FIRST_PROMPT, environmentSection } from './prompts';
 
 /** Wraps mid-turn user messages so the model knows they arrived while it was working. */
 export function queuedMessageText(texts: string[]): string {
@@ -105,7 +105,7 @@ export const PLAN_SPEC: ToolSpec = fnSpec(PLAN_TOOL,
 const PLAN_PROMPT = `\n\nYou are in PLAN MODE. You may only read and search; you cannot edit files or run commands.
 Research the task thoroughly, then call the exit_plan_mode tool with a concrete plan for the user to approve: numbered steps, the files you will change, risks, and how you will verify the result. Do not write the plan only as chat text and do not start implementing until the plan is approved.`;
 
-export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memory: string, activeFile?: string, subagent = false, extra = '', checks = '', roots?: WorkspaceRoot[]): string {
+export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memory: string, activeFile?: string, subagent = false, extra = '', checks = '', roots?: WorkspaceRoot[], planFirst = false): string {
   const hint = effortParams(effort).hint;
   return [
     BASE_PROMPT,
@@ -113,6 +113,7 @@ export function buildSystemPrompt(mode: Mode, effort: Effort, root: string, memo
     subagent ? SUBAGENT_PROMPT : `\n\n${FANOUT_PROMPT}`,
     extra ? `\n\n${extra}` : '',
     hint ? `\n\nEffort guidance: ${hint}` : '',
+    planFirst ? `${hint ? '\n' : '\n\n'}${PLAN_FIRST_PROMPT}` : '',
     `\n\n${environmentSection(root, { platform: process.platform, ...(roots && roots.length > 1 ? { roots } : {}) })}`,
     checks ? `\n\n${checks}` : '',
     activeFile ? `\nActive file: ${activeFile}` : '',

@@ -10,6 +10,7 @@
  *                      verified with the related tests first; the full checks always give the final verdict
  *   loopGuard.ts       notices the model repeating itself within a turn, and the reminders that nudge it out
  *   selfReview.ts      the once-per-turn fresh-context review of the turn's diff before a turn that changed files ends
+ *   planFirst.ts       holds the turn's first file change until the model has written a task list (once per turn)
  */
 import { ChatMessage, StreamResult, ToolCall, ToolSpec } from './llm';
 import { contextLimitFromError, isContextLengthError } from './modelInfo';
@@ -28,6 +29,7 @@ import { LoopGuard, withNudge } from './loopGuard';
 import { EDIT_STAT_TOOLS } from './editStats';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
 import { selfReview, shouldSelfReview } from './selfReview';
+import { PlanFirstGate, planFirstActive, planFirstMessage } from './planFirst';
 import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, narrowCheck, narrowedLabel, sameDigest, scopeChecks } from './checks';
 import { findTestFiles } from './verify';
 import {
@@ -314,6 +316,10 @@ export class Agent {
     /** Notices the model repeating itself (same call, failing edits or commands) and nudges it; reset per turn. */
     const loop = new LoopGuard();
     let reviewed = false;
+    /** Holds the turn's first file change until a task list exists (planFirst.ts); the setting is read once per turn. */
+    const planFirstSetting = this.deps.planFirst?.();
+    const planFirstOn = (): boolean => planFirstActive(planFirstSetting, run.effort, run.mode, !!this.deps.subagent);
+    const planGate = new PlanFirstGate(planFirstOn, !!unfinishedTodos(this.todoState().todos ?? []).length);
     /** Files changed since the checks last ran. */
     let dirty = false;
     this.track = { changed: new Set(), abs: new Set(), verified: [] };
@@ -345,7 +351,7 @@ export class Agent {
         const memory = (await this.deps.memory?.()) ?? '';
         const system: ChatMessage = {
           role: 'system',
-          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots),
+          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots, planFirstOn()),
         };
         const specs = this.specsFor(run.mode);
         this.lastContext = measureContext(system.content ?? '', memory, specs);
@@ -465,7 +471,17 @@ export class Agent {
           this.history.push({ role: 'user', content: `A Stop hook asked you to continue: ${stop.reason ?? 'the task is not finished'}`, display: 'Stop hook: continue' });
           continue;
         }
-        const exec = (tc: ToolCall) => this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn);
+        // Plan first: the turn's first file-changing calls are held (not run) until a task list exists (planFirst.ts).
+        const before = this.history.slice(this.turnStarts[turn], this.history.length - 1);
+        const held = new Set<string>();
+        res.toolCalls.forEach((tc, j) => {
+          const tool = this.toolFor(tc.function.name);
+          const isEdit = tool?.kind === 'edit' && isAllowed(this.syncMode(run), tool.kind);
+          if (planGate.shouldHold(isEdit, before, res.toolCalls.slice(0, j))) { held.add(tc.id); }
+        });
+        planGate.endRound();
+        if (held.size) { ui.info('Plan first: the agent was asked to write a task list before changing files.'); }
+        const exec = (tc: ToolCall) => (held.has(tc.id) ? Promise.resolve(this.holdForPlan(tc, ui)) : this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn));
         for (const batch of planBatches(res.toolCalls, (tc) => this.parallelSafe(tc, run.mode), MAX_PARALLEL_TOOLS)) {
           // Changes from before this batch (the user typing, a background agent) are not this batch's doing.
           if (feed) { cursor = feed.cursor(); }
@@ -475,6 +491,8 @@ export class Agent {
           const external = [...(seen?.paths ?? []), ...this.takePending()];
           if (external.length) { dirty = true; this.noteChanged(external); }
           batch.forEach((tc, j) => {
+            // A held call did not run: it is neither a failure or repeat for the loop guard nor a change.
+            if (held.has(tc.id)) { this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] }); return; }
             const loopNudge = loop.observe(tc.function.name, tc.function.arguments, results[j], this.toolFor(tc.function.name)?.kind);
             this.history.push({ role: 'tool', tool_call_id: tc.id, content: withNudge(results[j], loopNudge, (t) => ui.info(t)) });
             // A command that changed files (a formatter, a code generator) is a change, not a check.
@@ -766,6 +784,16 @@ export class Agent {
     const { todos, rounds } = this.todoState();
     if (!todos || !unfinishedTodos(todos).length || rounds === 0 || rounds % TODO_REMINDER_ROUNDS !== 0) { return ''; }
     return todoReminder(todos, rounds);
+  }
+
+  /** A file change held by plan-first: shown as not run, and the model is told to write its task list first. */
+  private holdForPlan(tc: ToolCall, ui: AgentUi): string {
+    const tool = this.toolFor(tc.function.name);
+    let detail = tc.function.name;
+    try { detail = relativizePaths(tool?.describe(JSON.parse(tc.function.arguments || '{}')) ?? detail, this.deps.root); } catch { /* keep the name */ }
+    ui.toolStart(tc.id, tc.function.name, tool?.kind ?? 'edit', tc.function.arguments, detail);
+    ui.toolEnd(tc.id, false, 'Not run yet: plan first (write the task list, then change files)');
+    return planFirstMessage(tc.function.name);
   }
 
   /** todo_write: replaces the task list shown to the user. */

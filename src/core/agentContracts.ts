@@ -15,6 +15,7 @@ import type { CheckCommand } from './checks';
 import type { EditDiagnostics } from './editDiagnostics';
 import type { SelfReviewSetting } from './selfReview';
 import type { EditOutcome } from './editStats';
+import type { PlanFirstSetting } from './planFirst';
 
 export interface ApprovalRequest {
   id: string;
@@ -121,6 +122,8 @@ export interface AgentDeps {
   diagnostics?: EditDiagnostics;
   /** infraonAssistant.selfReview: review the turn's diff with a fresh model call before finishing (selfReview.ts). Missing = off. */
   selfReview?: () => SelfReviewSetting;
+  /** infraonAssistant.planFirst: hold the turn's first file change until a task list exists (planFirst.ts). Missing = off. */
+  planFirst?: () => PlanFirstSetting;
   /** A file's content before `turn` changed it (its checkpoint backup); undefined when the turn did not capture it. */
   original?: (turn: number, absPath: string) => Promise<{ existed: boolean; data?: Buffer } | undefined>;
   /** Repo map section for the system prompt (repoMap.ts), fetched once per turn; '' when off or not built yet. */

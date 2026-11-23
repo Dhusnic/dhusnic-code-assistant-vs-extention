@@ -115,6 +115,9 @@ Today's date: ${date}
 ${shellGuide(env.platform)}`;
 }
 
+/** Added when plan-first is on for the turn (planFirst.ts): it matches the loop holding the first unplanned file change. */
+export const PLAN_FIRST_PROMPT = 'Plan before you change files: read the files involved, then call todo_write with the concrete steps and the files each step will change, and only then start editing. A file change made before that list exists is held once and not run.';
+
 /** Main agent only (sub-agents cannot delegate): how to split several tasks across parallel sub-agents. */
 export const FANOUT_PROMPT = `# Several tasks at once: one sub-agent per task
 When the user gives several independent tasks in one message (a numbered or bulleted list, or "do A, B and C"), split them: launch one sub-agent per task with the agent tool, ALL in the SAME response, so they run in parallel.
