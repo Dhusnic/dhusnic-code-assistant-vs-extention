@@ -7,6 +7,7 @@
  *   agentContracts.ts  the interfaces to the UI, the safety layer, the host's dependencies and sub-agent spawning
  *   agentTools.ts      the built-in tools as the model sees them, and the system prompt
  *   checks.ts          which project checks to run for a set of changes, and how their output is read
+ *   loopGuard.ts       notices the model repeating itself within a turn, and the reminders that nudge it out
  */
 import { ChatMessage, StreamResult, ToolCall, ToolSpec } from './llm';
 import { contextLimitFromError, isContextLengthError } from './modelInfo';
@@ -21,6 +22,7 @@ import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from '
 import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact } from './compaction';
 import * as path from 'path';
 import { FileReadTracker, clipOutput, resolveIn } from './fstools';
+import { LoopGuard, withNudge } from './loopGuard';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
 import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, MAX_CHECK_ROUNDS, NOT_RUN, checkLabel, checksPromptSection, exitCodeOf, scopeChecks } from './checks';
 import {
@@ -294,6 +296,8 @@ export class Agent {
     /** Tool rounds in this turn, and whether the end-of-turn task-list reminder was sent. */
     let toolRounds = 0;
     let todoEndNudged = false;
+    /** Notices the model repeating itself (same call, failing edits or commands) and nudges it; reset per turn. */
+    const loop = new LoopGuard();
     /** Files changed since the checks last ran. */
     let dirty = false;
     this.track = { changed: new Set(), abs: new Set(), verified: [] };
@@ -418,14 +422,15 @@ export class Agent {
           const external = [...(seen?.paths ?? []), ...this.takePending()];
           if (external.length) { dirty = true; this.noteChanged(external); }
           batch.forEach((tc, j) => {
-            this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] });
+            const loopNudge = loop.observe(tc.function.name, tc.function.arguments, results[j], this.toolFor(tc.function.name)?.kind);
+            this.history.push({ role: 'tool', tool_call_id: tc.id, content: withNudge(results[j], loopNudge, (t) => ui.info(t)) });
             // A command that changed files (a formatter, a code generator) is a change, not a check.
             if (this.noteResult(tc.function.name, tc.function.arguments, results[j], external.length > 0)) { dirty = true; }
           });
         }
         toolRounds++;
         // The task list went stale (many rounds without todo_write): remind the model inside the last tool result.
-        const nudge = this.todoNudge();
+        const nudge = [this.todoNudge(), withNudge('', loop.endRound(), (t) => ui.info(t)).trim()].filter(Boolean).join('\n\n');
         if (nudge) {
           const last = this.history[this.history.length - 1];
           if (last?.role === 'tool') { last.content = `${last.content ?? ''}\n\n${nudge}`; }
