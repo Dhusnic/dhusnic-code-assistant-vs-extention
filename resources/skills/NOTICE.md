@@ -6,7 +6,7 @@ with the same name replaces the built-in one. They are read-only; copy one to ch
 | Skill | Origin | License |
 |---|---|---|
 | `docx`, `pdf`, `pptx`, `xlsx`, `skill-creator` | Anthropic's document and skill-authoring skills | Apache License 2.0 (`LICENSE.txt` in each folder) |
-| `import-memory` | Written for Infraon Code Assistant | Same license as the extension |
+| `import-memory`, `code-review`, `simplify`, `security-review`, `init`, `run`, `pr-creation`, `dataviz`, `update-config` | Written for Infraon Code Assistant | Same license as the extension |
 
 ## Changes made for Infraon (Apache 2.0, section 4(b))
 

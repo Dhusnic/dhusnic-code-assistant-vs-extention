@@ -18,7 +18,7 @@ import { recordingUi, tmpDir } from './helpers';
 
 const ROOT = path.join(__dirname, '..', '..');
 const BUILTIN_BASE = path.join(ROOT, 'resources');
-const EXPECTED = ['docx', 'import-memory', 'pdf', 'pptx', 'skill-creator', 'xlsx'];
+const EXPECTED = ['code-review', 'dataviz', 'docx', 'import-memory', 'init', 'pdf', 'pptx', 'pr-creation', 'run', 'security-review', 'simplify', 'skill-creator', 'update-config', 'xlsx'];
 
 /* ------------------------------------------------------------------ the shipped bundle */
 
@@ -29,8 +29,10 @@ test('every built-in skill loads without errors, can be used by the agent and de
   for (const s of skills) {
     assert.equal(s.source, 'builtin');
     assert.ok(s.modelInvocable, `${s.name} is usable by the agent`);
-    assert.ok(s.requires?.length, `${s.name} declares requires:`);
-    for (const r of s.requires!) { assert.notEqual(parseRequirement(r).kind, 'unknown', `${s.name}: ${r}`); }
+    // Skills that ship scripts must say what those need; prompt-only skills have nothing to declare.
+    const hasScripts = await fs.stat(path.join(BUILTIN_BASE, 'skills', s.name, 'scripts')).then(() => true, () => false);
+    if (hasScripts) { assert.ok(s.requires?.length, `${s.name} declares requires:`); }
+    for (const r of s.requires ?? []) { assert.notEqual(parseRequirement(r).kind, 'unknown', `${s.name}: ${r}`); }
     assert.ok(s.description.length <= 1024, `${s.name} description fits the skill list`);
   }
 });

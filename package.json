@@ -431,7 +431,7 @@
                         "items": {
                             "type": "string"
                         },
-                        "markdownDescription": "Built-in skills to leave out (by name, e.g. `pptx`), or `*` for all. Built-in skills: `docx`, `xlsx`, `pptx`, `pdf`, `skill-creator`, `import-memory`. Run **Infraon Assistant: Check Skill Requirements** to see what each one needs on this machine.",
+                        "markdownDescription": "Built-in skills to leave out (by name, e.g. `pptx`), or `*` for all. Built-in skills: `docx`, `xlsx`, `pptx`, `pdf`, `skill-creator`, `import-memory`, `code-review`, `simplify`, `security-review`, `init`, `run`, `pr-creation`, `dataviz`, `update-config`. Run **Infraon Assistant: Check Skill Requirements** to see what each one needs on this machine.",
                         "order": 8
                     },
                     "infraonAssistant.autoVerify": {

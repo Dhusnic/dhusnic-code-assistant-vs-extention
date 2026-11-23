@@ -45,7 +45,7 @@ User types in the session tab (media/session.js)
 | Safety | `core/permissions.ts`, `core/hooks.ts`, `core/redact.ts` (secret masking), `core/audit.ts`, `core/policy.ts`, `core/centralPolicy.ts`, `host/features/guard.ts` |
 | History and undo | `core/store.ts`, `core/sessions.ts`, `core/checkpoints.ts`, `core/changeJournal.ts`, `core/changes.ts` |
 | Context | `core/memoryFiles.ts`, `core/mentions.ts`, `core/skills.ts`, `core/teamSkills.ts`, `core/skillDoctor.ts` (checks a skill's `requires:` on this machine; its note is appended when the skill loads), `core/compaction.ts`, `core/handoff.ts` |
-| Built-in skills | `resources/skills/` (docx, xlsx, pptx, pdf, skill-creator, import-memory; lowest precedence, read-only; `NOTICE.md` lists origins and changes) |
+| Built-in skills | `resources/skills/` (docx, xlsx, pptx, pdf, skill-creator, import-memory, code-review, simplify, security-review, init, run, pr-creation, dataviz, update-config; lowest precedence, read-only; `NOTICE.md` lists origins and changes) |
 | Remote servers | `core/ssh.ts`, `core/remoteTools.ts`, `host/features/remote.ts`, `host/features/servers.ts` |
 | Web access | `core/web/` (see `core/web/types.ts` for the layout) |
 | Editor features | `host/completions.ts` + `core/completion.ts` (ghost text: FIM via `/completions` per model family in `core/fim.ts`, chat fallback; open-tab and imported-signature context from `core/completionContext.ts`), `core/inlineEdit.ts`, `host/features/editorActions.ts` (light-bulb actions: fix, edit, document, generate tests), `host/features/scm.ts` (commit message button in Source Control), `host/diffProvider.ts` |
