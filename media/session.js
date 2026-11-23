@@ -741,33 +741,35 @@
     post({ type: 'listSkills' });
   }
   function closeSkills() { $('skillsModal')?.remove(); input.focus(); }
+  const skillSourceLabel = (src) => (src === 'user' ? 'personal' : src === 'builtin' ? 'built-in' : 'project');
+  const inSkillFilter = (s, f) => f === 'all' || skillSourceLabel(s.source) === f;
   function renderSkills() {
     const body = $('skBody'); if (!body) { return; }
     if (skillView === 'new') { renderSkillForm(body); return; }
     if (skillView === 'edit' && editDetail) { renderSkillForm(body, editDetail); return; }
     if (skillView === 'ai') { renderSkillAi(body); return; }
     const q = skillQuery.toLowerCase();
-    const items = skillsData.items.filter((s) => (skillFilter === 'all' || (skillFilter === 'project' ? s.source === 'project' : s.source === 'user'))
+    const items = skillsData.items.filter((s) => inSkillFilter(s, skillFilter)
       && (!q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)));
-    const count = (f) => skillsData.items.filter((s) => f === 'all' || (f === 'project' ? s.source === 'project' : s.source === 'user')).length;
+    const count = (f) => skillsData.items.filter((s) => inSkillFilter(s, f)).length;
     body.innerHTML = `<div class="mtitle sk-head"><span class="sk-title">Skills</span><span class="sk-count">${skillsData.items.length}</span>
         <span class="info" tabindex="0" role="button" aria-label="About skills" aria-describedby="skInfoTip"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.2v4.3" stroke-linecap="round"/><circle cx="8" cy="4.9" r=".8" fill="currentColor" stroke="none"/></svg>
           <span class="tip" role="tooltip" id="skInfoTip">Reusable instructions for recurring tasks. Run one with <code>/name</code>, or let the agent pick it automatically when your request matches its description. Compatible with Claude Code (<code>.claude/skills/&lt;name&gt;/SKILL.md</code>).</span></span>
         <span class="spacer"></span><button class="icon-btn" id="skClose" title="Close (Esc)">✕</button></div>
       <div class="sk-tools"><input id="skSearch" type="search" placeholder="Search skills" value="${esc(skillQuery)}">
-        ${['all', 'project', 'personal'].map((f) => `<button class="seg${skillFilter === f ? ' active' : ''}" data-skf="${f}">${f[0].toUpperCase() + f.slice(1)} · ${count(f)}</button>`).join('')}
-        <span class="spacer"></span><button class="btn sec" id="skAi">Create with AI</button><button class="btn" id="skNew">＋ New skill</button></div>
+        ${['all', 'project', 'personal', 'built-in'].map((f) => `<button class="seg${skillFilter === f ? ' active' : ''}" data-skf="${f}">${f[0].toUpperCase() + f.slice(1)} · ${count(f)}</button>`).join('')}
+        <span class="spacer"></span><button class="btn sec" id="skDoctor" title="Check that the tools skills need (Python, LibreOffice, ...) are installed on this machine">Check requirements</button><button class="btn sec" id="skAi">Create with AI</button><button class="btn" id="skNew">＋ New skill</button></div>
       <div class="sk-list">${items.length ? items.map((s) => `
         <div class="sk-row" data-name="${esc(s.name)}">
           <div class="sk-main">
             <div class="sk-name"><b>/${esc(s.name)}</b>${s.argumentHint ? `<span class="muted"> ${esc(s.argumentHint)}</span>` : ''}
-              <span class="tchip">${s.source === 'user' ? 'personal' : 'project'}</span>${s.kind === 'command' ? '<span class="tchip alt">command</span>' : ''}${s.userInvocable ? '' : '<span class="tchip alt">agent only</span>'}</div>
+              <span class="tchip">${skillSourceLabel(s.source)}</span>${s.kind === 'command' ? '<span class="tchip alt">command</span>' : ''}${s.userInvocable ? '' : '<span class="tchip alt">agent only</span>'}</div>
             <div class="sk-desc">${esc(s.description)}</div>
-            <div class="sk-meta muted small">${esc(s.path)}${s.files ? ` · ${s.files} supporting file${s.files === 1 ? '' : 's'}` : ''}${s.allowedTools.length ? ` · tools: ${esc(s.allowedTools.join(', '))}` : ''}</div>
+            <div class="sk-meta muted small">${esc(s.path)}${s.files ? ` · ${s.files} supporting file${s.files === 1 ? '' : 's'}` : ''}${s.allowedTools.length ? ` · tools: ${esc(s.allowedTools.join(', '))}` : ''}${s.requires && s.requires.length ? ` · <span title="${esc(s.requires.join(', '))}">needs ${s.requires.length} installed tool${s.requires.length === 1 ? '' : 's'}</span>` : ''}</div>
           </div>
           <div class="sk-side">
             <label class="switch${s.kind === 'command' ? ' disabled' : ''}" title="${s.kind === 'command' ? 'Legacy commands can only be run with /name' : 'Let the agent load this skill by itself when a request matches'}"><input type="checkbox" data-sk="toggle"${s.modelInvocable ? ' checked' : ''}${s.kind === 'command' ? ' disabled' : ''}><span class="slider"></span><span class="sl">Auto</span></label>
-            <div class="sk-acts">${s.userInvocable ? '<button class="icon-btn" data-sk="test" title="Test it now in this session">▶ Test</button><button class="icon-btn" data-sk="run" title="Put /name in the input">/ Use</button>' : ''}${s.kind === 'skill' ? '<button class="icon-btn" data-sk="form" title="Edit in the form">✎ Edit</button>' : ''}<button class="icon-btn" data-sk="file" title="Open SKILL.md">📝</button><button class="icon-btn" data-sk="copy" title="${s.source === 'user' ? 'Copy to the project (share with the team)' : 'Copy to my personal skills'}">⧉</button><button class="icon-btn" data-sk="reveal" title="Show in folder">📂</button><button class="icon-btn" data-sk="delete" title="Delete">🗑</button></div>
+            <div class="sk-acts">${s.userInvocable ? '<button class="icon-btn" data-sk="test" title="Test it now in this session">▶ Test</button><button class="icon-btn" data-sk="run" title="Put /name in the input">/ Use</button>' : ''}${s.kind === 'skill' && s.source !== 'builtin' ? '<button class="icon-btn" data-sk="form" title="Edit in the form">✎ Edit</button>' : ''}<button class="icon-btn" data-sk="file" title="Open SKILL.md">📝</button><button class="icon-btn" data-sk="copy" title="${s.source === 'user' ? 'Copy to the project (share with the team)' : s.source === 'builtin' ? 'Copy to my personal skills to customize it (the copy replaces the built-in)' : 'Copy to my personal skills'}">⧉</button><button class="icon-btn" data-sk="reveal" title="Show in folder">📂</button>${s.source === 'builtin' ? '' : '<button class="icon-btn" data-sk="delete" title="Delete">🗑</button>'}</div>
           </div>
           ${s.issues ? `<div class="sk-issues" title="Open ✎ Edit to see the checks">⚠ ${s.issues} issue${s.issues === 1 ? '' : 's'} may stop the agent from using this skill — open ✎ Edit to see them</div>` : ''}
           <div class="sk-test" hidden><input class="sk-args" placeholder="${esc(s.argumentHint || 'arguments (optional)')}"><button class="btn" data-sk="go">Run test</button><button class="btn sec" data-sk="cancel">Cancel</button></div>
@@ -776,6 +778,7 @@
     $('skClose').onclick = closeSkills;
     $('skNew').onclick = () => { skillView = 'new'; renderSkills(); };
     $('skAi').onclick = () => { skillView = 'ai'; renderSkills(); };
+    $('skDoctor').onclick = () => post({ type: 'checkSkillRequirements' });
     const search = $('skSearch');
     search.oninput = () => { skillQuery = search.value; const pos = search.selectionStart; renderSkills(); const s2 = $('skSearch'); s2.focus(); s2.setSelectionRange(pos, pos); };
     body.querySelectorAll('[data-skf]').forEach((b) => (b.onclick = () => { skillFilter = b.dataset.skf; renderSkills(); }));
@@ -1227,7 +1230,7 @@
       const p = slash[1].toLowerCase();
       const all = state.commands || [];
       const ranked = [...all.filter((c) => c.name.toLowerCase().startsWith(p)), ...all.filter((c) => !c.name.toLowerCase().startsWith(p) && c.name.toLowerCase().includes(p))];
-      openPopup(ranked.map((c) => ({ id: c.name, label: `/${c.name}${c.args ? ' ' + c.args : ''}`, desc: `${c.skill ? `${c.source === 'user' ? 'personal' : 'project'} skill · ` : ''}${c.description}` })),
+      openPopup(ranked.map((c) => ({ id: c.name, label: `/${c.name}${c.args ? ' ' + c.args : ''}`, desc: `${c.skill ? `${skillSourceLabel(c.source)} skill · ` : ''}${c.description}` })),
         (it) => { input.value = `/${it.id} `; hidePopup(); input.focus(); autosize(); });
       return;
     }

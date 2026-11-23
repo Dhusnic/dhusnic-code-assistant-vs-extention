@@ -19,6 +19,11 @@ export interface ToolCtx {
   reads?: ReadTracker;
   /** Language-server errors for edited files; edit tools append the errors an edit introduced. Missing: no check. */
   diagnostics?: EditDiagnostics;
+  /**
+   * Folders outside the workspace that read tools (read_file, list_dir) may open by absolute path, never write:
+   * the folders of loaded skills (built-in, personal, team), so the agent can read the references and scripts they ship.
+   */
+  readOnlyRoots?: string[];
 }
 
 export interface ReadTracker {

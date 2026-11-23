@@ -243,6 +243,9 @@ export class SessionPanel {
         } catch (e: any) { this.post({ type: 'skillResult', ok: false, error: e.message ?? String(e) }); }
         break;
       }
+      case 'checkSkillRequirements':
+        await this.hub.checkSkillRequirements();
+        break;
       case 'copySkill':
         try {
           await this.hub.duplicateSkill(String(m.name), m.scope === 'personal' ? 'personal' : 'project', m.newName ? String(m.newName) : undefined);
@@ -397,7 +400,8 @@ Look at the code first if that helps make the steps concrete. If anything import
       const skill = slash && !slash.known ? findSkill(this.hub.skills, slash.name) : undefined;
       if (slash && skill) {
         if (!skill.userInvocable) { this.info(`/${skill.name} is configured to be used by the agent only (user-invocable: false).`, true); return; }
-        await this.dispatch(`The user ran the skill /${skill.name}${slash.args ? ` with arguments: ${slash.args}` : ''}. Follow its instructions now.\n\n${expandSkill(skill, slash.args)}`, `/${skill.name}${slash.args ? ` ${slash.args}` : ''}`, []);
+        const env = await this.hub.skillEnvironment(skill).catch(() => '');
+        await this.dispatch(`The user ran the skill /${skill.name}${slash.args ? ` with arguments: ${slash.args}` : ''}. Follow its instructions now.\n\n${expandSkill(skill, slash.args)}${env}`,`/${skill.name}${slash.args ? ` ${slash.args}` : ''}`, []);
         return;
       }
       if (slash && slash.known && this.mgr.agent(this.sid, this.focused).busy && !SAFE_WHILE_BUSY.has(slash.name)) {

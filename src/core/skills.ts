@@ -10,15 +10,19 @@ import { parseFrontmatter } from './frontmatter';
  *   <base>/skills/<name>/SKILL.md   frontmatter (name, description, argument-hint, allowed-tools,
  *                                   disable-model-invocation, user-invocable) + instructions; may ship supporting files
  *   <base>/commands/<name>.md       legacy custom slash commands (treated as user-only skills)
- * where <base> is <workspace>/.claude, <workspace>/.infraon, ~/.claude or ~/.infraon.
+ * where <base> is <workspace>/.claude, <workspace>/.infraon, ~/.claude or ~/.infraon, a team library, or the extension's
+ * own resources folder (built-in skills: lowest precedence, read-only; copy one to personal/project to change it).
+ * `requires:` (Infraon extension to the format) lists what a skill needs on the machine, checked by skillDoctor.ts.
  */
+export type SkillSource = 'project' | 'user' | 'builtin';
+
 export interface Skill {
   name: string;
   description: string;
   body: string;
   dir: string;
   file: string;
-  source: 'project' | 'user';
+  source: SkillSource;
   kind: 'skill' | 'command';
   argumentHint?: string;
   allowedTools?: string[];
@@ -28,6 +32,8 @@ export interface Skill {
   userInvocable: boolean;
   /** Supporting files next to SKILL.md (relative paths). */
   files: string[];
+  /** Machine requirements (frontmatter `requires:`), e.g. python>=3.10, py:openpyxl, cmd:soffice, npm:docx. */
+  requires?: string[];
 }
 
 export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]{0,63}$/i;
@@ -48,13 +54,25 @@ const list = (v: string | string[] | undefined): string[] | undefined => {
   return items.length ? [...new Set(items.map((t) => TOOL_ALIASES[t.toLowerCase()] ?? t))] : undefined;
 };
 
+/** `requires:` as a YAML list or a comma-separated string; kept verbatim (no tool aliasing). */
+function requirementList(v: string | string[] | undefined): string[] | undefined {
+  if (v === undefined) { return undefined; }
+  const items = (Array.isArray(v) ? v : v.replace(/^\[|\]$/g, '').split(',')).map((x) => x.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+  return items.length ? [...new Set(items)] : undefined;
+}
+
+/** Built-in skills ship inside the extension; editing them would be lost on the next update. */
+function assertWritable(skill: Skill): void {
+  if (skill.source === 'builtin') { throw new Error(`"${skill.name}" is a built-in skill and cannot be changed. Copy it to your personal or project skills and edit the copy (the copy takes precedence).`); }
+}
+
 /** First meaningful line of the body, used when a command file has no description. */
 function firstLine(body: string): string {
   const line = body.split(/\r?\n/).map((l) => l.replace(/^#+\s*/, '').trim()).find((l) => l && !l.startsWith('<!--'));
   return line ? line.slice(0, 200) : '';
 }
 
-export function parseSkill(text: string, meta: { dirName: string; source: 'project' | 'user'; kind: 'skill' | 'command'; dir: string; file: string }): Skill | { error: string } {
+export function parseSkill(text: string, meta: { dirName: string; source: SkillSource; kind: 'skill' | 'command'; dir: string; file: string }): Skill | { error: string } {
   const { fm, body } = parseFrontmatter(text);
   const name = str(fm.name) || meta.dirName;
   if (!SKILL_NAME_RE.test(name)) { return { error: `invalid skill name "${name}" (use letters, digits, - _ . :)` }; }
@@ -69,6 +87,7 @@ export function parseSkill(text: string, meta: { dirName: string; source: 'proje
     modelInvocable: meta.kind === 'skill' ? !bool(fm['disable-model-invocation'], false) : false,
     userInvocable: bool(fm['user-invocable'], true),
     files: [],
+    requires: requirementList(fm.requires),
   };
 }
 
@@ -85,7 +104,7 @@ async function listFiles(dir: string, rel = '', out: string[] = [], limit = 30):
 }
 
 /** Loads skills from `.claude` / `.infraon` style base folders; later bases override earlier ones (project over personal). */
-export async function loadSkills(bases: Array<{ base: string; source: 'project' | 'user' }>): Promise<{ skills: Skill[]; errors: string[] }> {
+export async function loadSkills(bases: Array<{ base: string; source: SkillSource }>): Promise<{ skills: Skill[]; errors: string[] }> {
   const byName = new Map<string, Skill>();
   const errors: string[] = [];
   for (const { base, source } of bases) {
@@ -193,6 +212,7 @@ export async function createSkill(base: string, s: NewSkill): Promise<string> {
 /** Turns automatic (agent-initiated) use on or off by editing the frontmatter in place, keeping everything else. */
 export async function setModelInvocation(skill: Skill, enabled: boolean): Promise<void> {
   if (skill.kind !== 'skill') { throw new Error('Legacy commands can only be run with /name.'); }
+  assertWritable(skill);
   const text = await fs.readFile(skill.file, 'utf8');
   const m = /^(﻿?---\r?\n)([\s\S]*?)(\r?\n---)/.exec(text);
   if (!m) { throw new Error('SKILL.md has no frontmatter'); }
@@ -203,6 +223,7 @@ export async function setModelInvocation(skill: Skill, enabled: boolean): Promis
 }
 
 export async function deleteSkill(skill: Skill): Promise<void> {
+  assertWritable(skill);
   if (skill.kind === 'command') { await fs.rm(skill.file, { force: true }); return; }
   if (path.basename(path.dirname(skill.dir)) !== 'skills') { throw new Error('Refusing to delete: unexpected skill location.'); }
   await fs.rm(skill.dir, { recursive: true, force: true });
@@ -262,6 +283,7 @@ const MANAGED = new Set(['name', 'description', 'argument-hint', 'allowed-tools'
 /** Rewrites SKILL.md from the form, keeping frontmatter keys the form does not manage (e.g. model). Renaming moves the folder. */
 export async function updateSkill(skill: Skill, input: NewSkill): Promise<string> {
   if (skill.kind !== 'skill') { throw new Error('Legacy commands are edited in their .md file.'); }
+  assertWritable(skill);
   const err = validateNewSkill(input);
   if (err) { throw new Error(err); }
   const { fm } = parseFrontmatter(await fs.readFile(skill.file, 'utf8'));
@@ -306,6 +328,7 @@ export async function copySkill(skill: Skill, toBase: string, newName = skill.na
 /** Adds a supporting file (template, script, reference) inside the skill folder. Paths cannot escape the folder. */
 export async function addSkillFile(skill: Skill, relPath: string, content: string): Promise<string> {
   if (skill.kind !== 'skill') { throw new Error('Supporting files need a skill folder (not a legacy command).'); }
+  assertWritable(skill);
   const rel = relPath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
   if (!rel || rel.split('/').some((p) => p === '..' || p === '') || /^[a-zA-Z]:/.test(rel)) { throw new Error('Use a relative path inside the skill folder, e.g. "templates/notes.md".'); }
   if (rel.toLowerCase() === 'skill.md') { throw new Error('SKILL.md is edited through the form.'); }

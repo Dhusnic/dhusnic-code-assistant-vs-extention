@@ -54,6 +54,10 @@ export const flows: Flow[] = [
       await s.waitFor('.sk-row[data-name="demo-skill"] .sk-name', { text: '/demo-skill' });
       await s.waitFor('.sk-row[data-name="demo-skill"] .sk-desc', { text: 'Demo skill for the automated UI tests' });
       await t.shot('skills-list');
+      // Built-in skills ship with the extension: listed as built-in, never deletable or editable in place.
+      await s.waitFor('.sk-row[data-name="docx"] .tchip', { text: 'built-in' });
+      assert.equal(await s.count('.sk-row[data-name="docx"] [data-sk="delete"]'), 0, 'built-in skills have no delete button');
+      assert.equal(await s.count('.sk-row[data-name="docx"] [data-sk="form"]'), 0, 'built-in skills have no edit button');
 
       await s.input('#skSearch', 'no-such-skill');
       await s.waitFor('.sk-empty', { text: 'No skills match.' });

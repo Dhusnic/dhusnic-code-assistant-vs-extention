@@ -56,6 +56,18 @@ export function resolveIn(ctx: { root: string; roots?: WorkspaceRoot[] }, p: str
   return resolveSafe(ctx.root, raw);
 }
 
+/** resolveIn, plus absolute paths inside ctx.readOnlyRoots (skill folders). Only read tools may call this. */
+export function resolveReadable(ctx: { root: string; roots?: WorkspaceRoot[]; readOnlyRoots?: string[] }, p: string): string {
+  try { return resolveIn(ctx, p); } catch (e) {
+    const raw = String(p ?? '');
+    if (path.isAbsolute(raw)) {
+      const abs = path.resolve(raw);
+      if ((ctx.readOnlyRoots ?? []).some((r) => inside(path.resolve(r), abs))) { return abs; }
+    }
+    throw e;
+  }
+}
+
 /** Where a search runs: the folder, the sub-path inside it, and the prefix that makes its results round-trip. */
 function searchScope(ctx: ToolCtx, p: unknown): { root: string; rel?: string; prefix: string } {
   if (!p) { return { root: ctx.root, prefix: '' }; }
@@ -340,7 +352,7 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
         { path: { type: 'string' }, start_line: { type: 'number' }, end_line: { type: 'number' } }, ['path']),
       describe: (a) => `Read ${a.path}`,
       async run(a, ctx) {
-        const abs = resolveIn(ctx, a.path);
+        const abs = resolveReadable(ctx, a.path);
         const lines = (await fs.readFile(abs, 'utf8')).split('\n');
         await ctx.reads?.markRead(abs);
         const s = Math.max(1, a.start_line ?? 1), e = Math.min(lines.length, a.end_line ?? lines.length);
@@ -431,7 +443,7 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
       spec: fnSpec('list_dir', 'List entries of a directory (non-recursive).', { path: { type: 'string' } }, ['path']),
       describe: (a) => `List ${a.path || '.'}`,
       async run(a, ctx) {
-        const ents = await fs.readdir(resolveIn(ctx, a.path), { withFileTypes: true });
+        const ents = await fs.readdir(resolveReadable(ctx, a.path), { withFileTypes: true });
         return ents.map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n') || '(empty)';
       },
     },

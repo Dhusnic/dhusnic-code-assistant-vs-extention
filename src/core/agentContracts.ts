@@ -107,6 +107,8 @@ export interface AgentDeps {
   extraSystem?: string;
   /** Skills (SKILL.md) the agent may load with the skill tool. */
   skills?: () => Skill[];
+  /** Appended to a skill's instructions when it loads: how to run its scripts here and what is missing (skillDoctor). */
+  skillEnvironment?: (skill: Skill) => Promise<string>;
   /**
    * The project's own checks (typecheck, lint, tests). When the agent changed files and is about to finish, these run
    * through run_command (same approvals and rules); failures go back to the model to fix before it may finish.

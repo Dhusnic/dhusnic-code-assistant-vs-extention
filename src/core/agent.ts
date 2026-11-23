@@ -744,7 +744,7 @@ export class Agent {
   }
 
   /** skill: returns a skill's full instructions for the model to follow (Claude-style progressive loading). */
-  private execSkill(id: string, rawArgs: string, ui: AgentUi): string {
+  private async execSkill(id: string, rawArgs: string, ui: AgentUi): Promise<string> {
     let args: { name?: string; args?: string } = {};
     try { args = JSON.parse(rawArgs || '{}'); } catch { /* reported below */ }
     const name = String(args.name ?? '').trim();
@@ -754,7 +754,10 @@ export class Agent {
     const s = findSkill(all, name);
     if (!s) { return finish(false, `ERROR: no skill named "${name}". Available: ${all.filter((x) => x.modelInvocable).map((x) => x.name).join(', ') || 'none'}.`); }
     if (!s.modelInvocable) { return finish(false, `ERROR: the skill "${s.name}" can only be started by the user (/${s.name}). Tell the user they can run it.`); }
-    return finish(true, `Skill "${s.name}" loaded. Follow these instructions to complete the user's request:\n\n${expandSkill(s, String(args.args ?? ''))}`);
+    let env = '';
+    // A failed requirements check must never block the skill: it only loses the hints.
+    if (s.requires?.length && this.deps.skillEnvironment) { try { env = await this.deps.skillEnvironment(s); } catch { /* no hints */ } }
+    return finish(true, `Skill "${s.name}" loaded. Follow these instructions to complete the user's request:\n\n${expandSkill(s, String(args.args ?? ''))}${env}`);
   }
 
   /**
@@ -897,6 +900,7 @@ export class Agent {
     const ctx = {
       root: this.deps.root, roots, signal, reads: this.reads, diagnostics: this.deps.diagnostics,
       snapshot: (abs: string) => this.deps.snapshot?.(turn, abs) ?? Promise.resolve(),
+      readOnlyRoots: (this.deps.skills?.() ?? []).filter((s) => s.kind === 'skill').map((s) => s.dir),
     };
     const allowed = isAllowed(opts.mode, tool.kind);
     let preview: ApprovalPreview | undefined;

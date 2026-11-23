@@ -13,6 +13,9 @@ import { CentralPolicy, clampMode, isMcpAllowed, isModelAllowed, loadPolicy } fr
 import { MemoryCache, loadMemoryText } from '../core/memoryFiles';
 import { ModelTask, RoutingConfig, routeModel } from '../core/modelRouting';
 import { parseTeamSources, syncTeamSkills } from '../core/teamSkills';
+import { SkillDoctor, environmentNote, formatDoctorReport, nodeDoctorDeps } from '../core/skillDoctor';
+import { createImageViewTool } from '../core/imageView';
+import { ocrImage } from '../core/ocr';
 import { FsToolsOptions, createFsTools } from '../core/fstools';
 import { LlmConfig, LlmFn, listModels, streamChat, streamChatOnce } from '../core/llm';
 import { ProbeState, healthView, probeModel, shouldProbe } from '../core/modelHealth';
@@ -149,6 +152,7 @@ export class Hub {
     ctx.subscriptions.push(watcher, { dispose: () => this.mcp.stopAll() }, vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('infraonAssistant.searchEngine') || e.affectsConfiguration('infraonAssistant.ripgrepPath')) { void this.initSearch(); }
       if (e.affectsConfiguration('infraonAssistant.mcpServers') && this.mcpLoaded) { void this.loadMcp(); }
+      if (e.affectsConfiguration('infraonAssistant.disabledBuiltinSkills')) { void this.loadSkills(); }
       if (e.affectsConfiguration('infraonAssistant')) { this.scheduleRefresh(); }
     }));
     void this.initSearch();
@@ -210,22 +214,47 @@ export class Hub {
     this.scheduleRefresh();
   }
 
-  /** Skills: personal (~/.claude, ~/.infraon) first, then the workspace's — project skills win on name clashes. */
+  /** Where the skills that ship with the extension live (resources/skills/<name>/SKILL.md). */
+  get builtinSkillBase(): string { return path.join(this.ctx.extensionUri.fsPath, 'resources'); }
+
+  /**
+   * Skills: built-in (shipped with the extension) first, then personal (~/.claude, ~/.infraon), team libraries, then the
+   * workspace's. Later bases win on name clashes, so a personal or project copy of a built-in skill replaces it.
+   * Built-ins listed in disabledBuiltinSkills ("*" for all) are left out.
+   */
   async loadSkills(): Promise<void> {
     const home = os.homedir();
+    const disabled = new Set(this.cfg.get<string[]>('disabledBuiltinSkills', []).map((n) => String(n).toLowerCase()));
     const r = await loadSkills([
+      ...(disabled.has('*') ? [] : [{ base: this.builtinSkillBase, source: 'builtin' as const }]),
       { base: path.join(home, '.claude'), source: 'user' }, { base: path.join(home, '.infraon'), source: 'user' },
       ...this.teamSkillBases.map((base) => ({ base, source: 'user' as const })),
       { base: path.join(this.root, '.claude'), source: 'project' }, { base: path.join(this.root, '.infraon'), source: 'project' },
     ]);
     void this.syncTeamSkills();
-    this.skills = r.skills;
+    this.skills = r.skills.filter((s) => s.source !== 'builtin' || !disabled.has(s.name.toLowerCase()));
     this.skillErrors = r.errors;
     this.scheduleRefresh();
     for (const fn of this.skillListeners) { fn(); }
   }
 
   readonly skillListeners = new Set<() => void>();
+  /** Checks skills' `requires:` on this machine; results are cached for a few minutes. */
+  readonly skillDoctor = new SkillDoctor(() => nodeDoctorDeps(this.workspaceRoots().map((r) => r.path)));
+
+  /** The environment note added when a skill loads (PowerShell, which Python, what is missing). Empty when nothing to say. */
+  async skillEnvironment(skill: Skill): Promise<string> {
+    if (!skill.requires?.length) { return ''; }
+    return environmentNote(await this.skillDoctor.check(skill), process.platform);
+  }
+
+  /** Command "Check Skill Requirements": checks every loaded skill and opens the report. */
+  async checkSkillRequirements(): Promise<void> {
+    const report = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Checking skill requirements…' },
+      async () => formatDoctorReport(await this.skillDoctor.checkAll(this.skills.filter((s) => s.requires?.length))));
+    const doc = await vscode.workspace.openTextDocument({ language: 'markdown', content: report });
+    await vscode.window.showTextDocument(doc, { preview: true });
+  }
   private teamSkillBases: string[] = [];
   private teamSync?: Promise<void>;
 
@@ -258,6 +287,19 @@ export class Hub {
   async toggleSkill(name: string, enabled: boolean): Promise<void> {
     const s = findSkill(this.skills, name);
     if (!s) { throw new Error(`Skill "${name}" not found.`); }
+    if (s.source === 'builtin') {
+      // Built-in files are replaced on every update, so automatic use is switched off through a setting instead.
+      const list = this.cfg.get<string[]>('disabledBuiltinSkills', []).filter((n) => n.toLowerCase() !== s.name.toLowerCase());
+      if (!enabled) {
+        const pick = await vscode.window.showInformationMessage(`"${s.name}" is a built-in skill. Turn it off completely (setting Disabled Built-in Skills), or copy it to your personal skills and change the copy?`, 'Turn off', 'Copy to personal');
+        if (pick === 'Copy to personal') { await this.duplicateSkill(s.name, 'personal'); return; }
+        if (pick !== 'Turn off') { return; }
+        list.push(s.name);
+      }
+      await this.cfg.update('disabledBuiltinSkills', list, vscode.ConfigurationTarget.Global);
+      await this.loadSkills();
+      return;
+    }
     await setModelInvocation(s, enabled);
     await this.loadSkills();
   }
@@ -265,6 +307,10 @@ export class Hub {
   async removeSkill(name: string): Promise<boolean> {
     const s = findSkill(this.skills, name);
     if (!s) { return false; }
+    if (s.source === 'builtin') {
+      void vscode.window.showInformationMessage(`"${s.name}" ships with the extension and cannot be deleted. Add it to the setting "Disabled Built-in Skills" to hide it.`);
+      return false;
+    }
     const what = s.kind === 'skill' ? `the folder ${path.basename(s.dir)} with its ${s.files.length + 1} file(s)` : path.basename(s.file);
     const ok = await vscode.window.showWarningMessage(`Delete the ${s.source === 'user' ? 'personal' : 'project'} skill "/${s.name}"? This removes ${what}.`, { modal: true }, 'Delete');
     if (ok !== 'Delete') { return false; }
@@ -292,8 +338,14 @@ export class Hub {
     return {
       name: s.name, description: s.description, instructions: s.body, argumentHint: s.argumentHint ?? '', allowedTools: s.allowedTools ?? [],
       modelInvocable: s.modelInvocable, userInvocable: s.userInvocable, source: s.source, kind: s.kind, files: s.files,
-      path: path.relative(s.source === 'project' ? this.root : os.homedir(), s.file).split(path.sep).join('/'),
+      path: this.skillPath(s),
     };
+  }
+
+  /** A short display path: relative to the workspace, the home folder, or "built-in/" for shipped skills. */
+  private skillPath(s: Skill): string {
+    const base = s.source === 'builtin' ? path.join(this.builtinSkillBase, 'skills') : s.source === 'project' ? this.root : os.homedir();
+    return `${s.source === 'builtin' ? 'built-in/' : ''}${path.relative(base, s.file).split(path.sep).join('/')}`;
   }
 
   lintDraft(draft: Partial<NewSkill>, originalName?: string) { return lintSkill(draft, this.skills, originalName); }
@@ -321,13 +373,17 @@ export class Hub {
       issues: s.kind === 'skill' ? lintSkill({ name: s.name, description: s.description, instructions: s.body, argumentHint: s.argumentHint, allowedTools: s.allowedTools, modelInvocable: s.modelInvocable, userInvocable: s.userInvocable }, [], s.name).filter((x) => x.level !== 'tip').length : 0,
       name: s.name, description: s.description, source: s.source, kind: s.kind, argumentHint: s.argumentHint,
       allowedTools: s.allowedTools ?? [], modelInvocable: s.modelInvocable, userInvocable: s.userInvocable,
-      files: s.files.length, path: path.relative(s.source === 'project' ? this.root : os.homedir(), s.file).split(path.sep).join('/'),
+      files: s.files.length, path: this.skillPath(s), requires: s.requires ?? [],
     }));
   }
 
   /** Every tool an agent of session `sid` can use (web tools keep their sources and approvals per session). */
   /** browserKey: whose test browser the testing tools drive (each sub-agent gets its own, so parallel testers do not collide). */
-  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, ...this.repoMapTools(), ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
+  private readonly imageView = createImageViewTool({
+    vision: () => (this.web.visionModel() ? (dataUrl, q, signal) => this.web.describeImage(dataUrl, q, signal) : undefined),
+    ocr: (buf, ext) => ocrImage(this.ctx.extensionUri.fsPath, buf, ext),
+  });
+  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, this.imageView, ...this.repoMapTools(), ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
 
   checkpointsFor(sid: string, aid: string): CheckpointStore { return new CheckpointStore(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid, aid)); }
 
@@ -461,6 +517,7 @@ export class Hub {
       subagent: !!sub,
       extraSystem: sub?.prompt,
       skills: () => this.skills,
+      skillEnvironment: (s) => this.skillEnvironment(s),
       agentTypes: () => this.agentTypes,
       spawn: sub ? undefined : (req) => this.manager.spawn(sid, aid, req),
       sendToAgent: sub ? undefined : (to, message) => this.manager.message(sid, to, message),

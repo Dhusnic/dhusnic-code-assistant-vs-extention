@@ -13,6 +13,7 @@ Internal use only.
 - **Code search by meaning.** Besides exact search (ripgrep), the agent can find code by describing what it does ("expired session cleanup"), ranked locally with no index service.
 - **Safety.** Permission rules and hooks, secret masking before anything reaches the model, an audit log, per-turn checkpoints with rewind, and central policy for administrators.
 - **Extensibility.** MCP servers, skills and custom agents (compatible with the Claude Code file formats), project memory in `CLAUDE.md`, `INFRAON.md` or `AGENTS.md`, and a shared team skill library.
+- **Built-in skills.** Word (`docx`), Excel (`xlsx`), PowerPoint (`pptx`) and PDF (`pdf`) files, writing and testing new skills (`skill-creator`), and importing memories from another assistant (`import-memory`). They run locally with Python, LibreOffice and Node: **Infraon Assistant: Check Skill Requirements** shows what is missing and how to install it. Turn one off with the setting `disabledBuiltinSkills`, or copy it to your own skills to change it.
 - **Linux servers.** Saved SSH servers with verified host keys. The agent can run commands, transfer files and follow long-running jobs.
 - **Web research (optional).** Search, fetch and cite pages through a guarded network layer (domain approval, SSRF protection, quotas, offline library).
 - **Scheduled tasks** and **automatic updates** from the company update server.

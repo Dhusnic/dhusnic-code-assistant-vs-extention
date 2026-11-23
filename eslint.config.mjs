@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['out/**', 'dist/**', 'node_modules/**', 'media/vendor/**', 'eval/**', '.e2e/**', 'installer/**', 'installer-mac/**'],
+    ignores: ['out/**', 'dist/**', 'node_modules/**', 'media/vendor/**', 'resources/skills/**', 'eval/**', '.e2e/**', 'installer/**', 'installer-mac/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

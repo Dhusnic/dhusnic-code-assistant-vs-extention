@@ -52,6 +52,10 @@
                 "title": "Infraon Assistant: Show Edit Statistics"
             },
             {
+                "command": "infraonAssistant.checkSkillRequirements",
+                "title": "Infraon Assistant: Check Skill Requirements"
+            },
+            {
                 "command": "infraonAssistant.explainSelection",
                 "title": "Infraon Assistant: Explain Selection"
             },
@@ -419,6 +423,15 @@
                             ]
                         },
                         "markdownDescription": "Shared skill libraries: folders or git URLs that everyone on the team receives automatically.",
+                        "order": 8
+                    },
+                    "infraonAssistant.disabledBuiltinSkills": {
+                        "type": "array",
+                        "default": [],
+                        "items": {
+                            "type": "string"
+                        },
+                        "markdownDescription": "Built-in skills to leave out (by name, e.g. `pptx`), or `*` for all. Built-in skills: `docx`, `xlsx`, `pptx`, `pdf`, `skill-creator`, `import-memory`. Run **Infraon Assistant: Check Skill Requirements** to see what each one needs on this machine.",
                         "order": 8
                     },
                     "infraonAssistant.autoVerify": {

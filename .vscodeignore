@@ -4,6 +4,9 @@ out/**
 dist/**
 !dist/extension.js
 **/*.map
+# built-in skills ship as source; never their Python caches
+resources/**/__pycache__/**
+resources/**/*.pyc
 node_modules/**
 # ssh2 is bundled into dist/extension.js by scripts/bundle.mjs, so no node_modules are shipped
 .vscode/**

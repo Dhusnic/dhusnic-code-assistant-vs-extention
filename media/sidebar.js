@@ -134,7 +134,7 @@
     const items = data.skills || [];
     if (!items.length) { box.innerHTML = '<div class="muted small">No skills yet. Skills are reusable instructions run with /name or picked by the agent automatically.</div>'; return; }
     box.innerHTML = items.map((s) => `<div class="skrow" data-name="${esc(s.name)}" title="${esc(s.description)}">
-      <span class="skn">/${esc(s.name)}</span><span class="tchip">${s.source === 'user' ? 'personal' : 'project'}</span>${s.modelInvocable ? '<span class="tchip auto" title="The agent can use it automatically">auto</span>' : ''}
+      <span class="skn">/${esc(s.name)}</span><span class="tchip">${s.source === 'user' ? 'personal' : s.source === 'builtin' ? 'built-in' : 'project'}</span>${s.modelInvocable ? '<span class="tchip auto" title="The agent can use it automatically">auto</span>' : ''}
       <span class="spacer"></span>${s.userInvocable ? '<button class="icon-btn" data-run title="Run in a new session">▶</button>' : ''}</div>`).join('')
       + (data.skillErrors ? `<div class="warn small">${data.skillErrors} skill file(s) could not be loaded — open Manage… to see why.</div>` : '');
   }
