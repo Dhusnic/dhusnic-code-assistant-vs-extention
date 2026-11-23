@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.28.0 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.29.0 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -22,17 +22,22 @@ What the installer does
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
 
-New in 0.28.0: more accurate coding
-- After each edit the agent sees any new errors in the file right away and fixes them.
-- It notices when it is going round in circles (the same failing edit or command) and changes approach.
-- Model settings are tuned per model, so answers are steadier.
-- At High and Max effort it reviews its own changes against your request before finishing
-  (setting: infraonAssistant.selfReview).
-- It starts with a map of your project, so it finds the right files faster.
-- Clearer test and build failures, more fix attempts at higher effort, and long conversations keep
-  track of what was changed.
-- Optional: smarter code search by meaning. Set infraonAssistant.embeddingModel to "auto" or to an
-  embedding model on the gateway. Off by default.
+New in 0.29.0: more reliable, smarter checks
+- The status line shows what is happening: "Waiting for the model... no response for 45 s" while the
+  gateway is silent, and "Writing index.html... 14.2 KB" while a file is being written.
+- The sidebar Status checks that the model really answers ("Gateway up - model not responding").
+- A gateway that stops answering is retried once, with a visible note, instead of minutes of "Thinking...".
+- At Max effort the agent writes a task list before its first change (setting: infraonAssistant.planFirst).
+- Sub-packages (for example a client/ next to a server/) are type-checked after changes, and test
+  runners such as vitest no longer hang in watch mode.
+- Fix rounds run only the related tests first; the full suite still runs before the agent finishes.
+- Repo map uses language-server symbols for Java, C#, Go, Kotlin and PHP.
+- Better inline completions (fill-in-the-middle, context from open tabs and imports).
+- Search by meaning turns on by itself when the gateway serves an embedding model.
+- Ctrl+Shift+P -> "Infraon Assistant: Show Edit Statistics" shows local edit success/failure counts.
+
+New in 0.28.0: fewer mistakes - errors after each edit are fixed at once, loop detection, self-review
+at High/Max effort, a project map, clearer test failures.
 
 New in 0.27.0: testing toolkit (/qa), browser and API testing, Generate Tests, Add Documentation,
 a commit-message button in Source Control, and search_code.
