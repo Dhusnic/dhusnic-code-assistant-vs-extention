@@ -1,13 +1,13 @@
 Hi team 👋
 
-Infraon Code Assistant 0.30.0 is out: it now works with Word, Excel, PowerPoint and PDF files 📄📊
+Infraon Code Assistant 0.31.0 is out: new built-in skills for everyday dev work 🛠️
 
 🆕 What's new
-• Ask for a Word doc, Excel sheet, PowerPoint deck or PDF: it creates, reads or edits the file, then renders the pages and checks the layout itself
-• skill-creator: build and test your own reusable skills with the agent
-• import-memory: bring your preferences over from ChatGPT or another assistant
-• These skills use Python, LibreOffice and Node on your PC. Ctrl/Cmd+Shift+P → "Infraon Assistant: Check Skill Requirements" shows what's missing and the install command
-• Everything stays on your machine and our gateway
+• /code-review: reviews your changes for bugs. /simplify cleans them up. /security-review checks for security problems
+• /init writes the project notes file. /run starts the app and checks your change really works
+• /pr-creation raises an Azure DevOps pull request (needs the az command line installed and logged in)
+• /dataviz for charts and /update-config to change assistant settings safely
+• Everything stays on your machine and our gateway. Turn a skill off with infraonAssistant.disabledBuiltinSkills
 • Already on 0.26.0 or later? You don't need the installer: the update installs by itself, just click "Reload Now" when asked (or Ctrl+Shift+P → "Infraon Assistant: Check for Updates")
 
 ⬇️ Download (office network / VPN only)

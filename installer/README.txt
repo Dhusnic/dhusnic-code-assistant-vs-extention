@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.30.0 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.31.0 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -21,6 +21,13 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.31.0: developer-workflow skills
+- /code-review reviews your changes for bugs, /simplify cleans them up, /security-review checks them for
+  security problems. /init writes the project notes file, /run starts the app and checks a change works.
+- /pr-creation raises an Azure DevOps pull request (needs the az command line). /dataviz helps with
+  charts. /update-config changes Infraon Assistant settings safely.
+- All run locally through the Infraon gateway only. Turn one off with infraonAssistant.disabledBuiltinSkills.
 
 New in 0.30.0: built-in skills for Office and PDF files
 - Ask for a Word document, Excel workbook, PowerPoint deck or PDF and the agent creates, reads or
