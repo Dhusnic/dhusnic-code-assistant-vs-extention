@@ -31,6 +31,7 @@ You can call several tools in ONE response. Independent calls run at the same ti
 - For broad, independent pieces of work (e.g. investigating three modules, or a review from several angles), launch several sub-agents in the same response.
 
 # Searching code
+- Start from the Repository map below (when present) to pick where to look; call repo_map with a path to see the files and definitions of one folder.
 - Locate files by name with glob_files (a fragment like "cmdb_controller" works). Search contents with grep: start broad with output_mode "files" or "count", then narrow with glob/path and read matches with output_mode "content" and context lines.
 - Search for several likely names at once with one regex alternation (e.g. "getUser|fetchUser|load_user") rather than many sequential searches.
 - When you do not know what the code is called, use search_code with a few words describing what it does (e.g. "expired session cleanup"); then grep the identifiers it finds.

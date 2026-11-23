@@ -25,7 +25,7 @@ User types in the session tab (media/session.js)
   → postMessage → SessionPanel (host/sessionPanel.ts)
   → Runtime (core/runtime.ts): finds the session and its main agent, queues input while it is busy
   → Agent.send (core/agent.ts): the tool loop
-       build system prompt (prompts.ts + memory files + skills + verify commands)
+       build system prompt (prompts.ts + memory files + skills + verify commands + repo map)
        → llm.streamChat (llm.ts, OpenAI-compatible /chat/completions, streaming, retries)
        → tool calls: scheduler.ts groups independent calls to run in parallel
        → each call: permission check (permissions.ts, hooks.ts, guard) → approval if needed → tool.run
@@ -40,7 +40,7 @@ User types in the session tab (media/session.js)
 |---|---|
 | Agent loop, sub-agents, plan mode | `core/agent.ts` (the loop), `core/agentContracts.ts` (UI, guard and dependency interfaces), `core/agentTools.ts` (built-in tool specs, system prompt), `core/checks.ts` (project checks), `core/agentTypes.ts`, `core/runtime.ts`, `core/notify.ts` |
 | LLM client | `core/llm.ts` (streaming, retry, idle timeout), `core/textToolCalls.ts` (tool calls written as text), `core/modelInfo.ts`, `core/modelRouting.ts`, `core/usage.ts` |
-| Tools | `core/tool.ts` (contracts), `core/fstools.ts` (files, search, commands), `core/search.ts` (ripgrep and a built-in fallback), `core/codeSearch.ts` (`search_code`: local BM25 ranking of code regions), `host/vscodeTools.ts` and `host/navTools.ts` (diagnostics, symbols, references) |
+| Tools | `core/tool.ts` (contracts), `core/fstools.ts` (files, search, commands), `core/search.ts` (ripgrep and a built-in fallback), `core/codeSearch.ts` (`search_code`: local BM25 ranking of code regions), `core/repoMap.ts` (repo map in the system prompt and the `repo_map` tool), `host/vscodeTools.ts` and `host/navTools.ts` (diagnostics, symbols, references) |
 | Safety | `core/permissions.ts`, `core/hooks.ts`, `core/redact.ts` (secret masking), `core/audit.ts`, `core/policy.ts`, `core/centralPolicy.ts`, `host/features/guard.ts` |
 | History and undo | `core/store.ts`, `core/sessions.ts`, `core/checkpoints.ts`, `core/changeJournal.ts`, `core/changes.ts` |
 | Context | `core/memoryFiles.ts`, `core/mentions.ts`, `core/skills.ts`, `core/teamSkills.ts`, `core/compaction.ts`, `core/handoff.ts` |

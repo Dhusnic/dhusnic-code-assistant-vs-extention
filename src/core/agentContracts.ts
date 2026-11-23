@@ -106,6 +106,8 @@ export interface AgentDeps {
   fileChanges?: FileChangeFeed;
   /** All workspace folders (multi-root); the first that equals root is the primary one. */
   roots?: () => WorkspaceRoot[];
+  /** Repo map section for the system prompt (repoMap.ts), fetched once per turn; '' when off or not built yet. */
+  repoMap?: () => Promise<string> | string;
 }
 
 export interface SpawnRequest {
