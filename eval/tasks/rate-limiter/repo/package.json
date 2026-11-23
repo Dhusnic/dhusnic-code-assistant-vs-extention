@@ -1,0 +1,8 @@
+{
+    "name": "public-api",
+    "version": "2.9.0",
+    "private": true,
+    "scripts": {
+        "test": "node --test"
+    }
+}

@@ -1,0 +1,10 @@
+{
+    "name": "extract-email-validation",
+    "prompt": "The email checks are copy-pasted in src/handlers/signup.js, src/handlers/invite.js and src/handlers/profile.js. Extract them into a new module src/validation/email.js that exports normalizeEmail(raw) (trims and lowercases) and isValidEmail(email), and make all three handlers use it. The handlers must no longer contain their own email regex. Behaviour must not change.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["refactor", "multi-file", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

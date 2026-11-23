@@ -1,0 +1,11 @@
+{
+    "name": "compose-middleware",
+    "prompt": "The tests in test/compose.test.js fail: our Koa-style compose() in src/compose.js does not wait for async middleware. Fix compose so the tests pass. It must follow Koa semantics: compose(middleware)(ctx, next?) returns a promise that settles when the whole chain has finished; next() returns a promise; an error thrown (synchronously or asynchronously) anywhere downstream rejects the upstream await next() and, if not caught, the returned promise; calling next() twice in one middleware rejects with an Error 'next() called multiple times'; the optional `next` passed to the composed function runs after the last middleware.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "mustNotChange": ["test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "failing-test", "async"],
+    "difficulty": "hard",
+    "language": "javascript"
+}

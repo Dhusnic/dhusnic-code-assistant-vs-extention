@@ -1,0 +1,10 @@
+{
+    "name": "json-bom",
+    "prompt": "Settings files saved with Notepad on Windows fail to load with an \"Unexpected token\" error. Fix loadSettings in src/settings.js: accept a UTF-8 byte order mark at the start of the file. While you are there: an empty or whitespace-only file means no settings ({}), and when the JSON is invalid the thrown Error's message must include the file path.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "config", "windows", "hidden-tests"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

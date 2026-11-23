@@ -1,0 +1,9 @@
+{
+    "name": "deploy-config",
+    "version": "1.0.4",
+    "private": true,
+    "bin": { "validate-config": "bin/validate-config.js" },
+    "scripts": {
+        "test": "node --test"
+    }
+}

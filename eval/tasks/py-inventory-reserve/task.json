@@ -1,0 +1,17 @@
+{
+    "name": "py-inventory-reserve",
+    "prompt": "Orders sometimes leave stock half reserved: when one line of an order cannot be reserved, the lines before it stay reserved. Fix reserve_order in shop/orders.py so an order is reserved all or nothing: if any line is short (counting every line of the same order against the same stock, since a SKU can appear on several lines), nothing changes and OutOfStock is raised naming the first SKU that is short. An unknown SKU raises KeyError and also changes nothing. Keep the public API of shop/inventory.py (Inventory.available, Inventory.reserve, Inventory.release) working as it is; you may add to it.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "requires": [
+        "python"
+    ],
+    "timeoutSeconds": 900,
+    "tags": [
+        "bugfix",
+        "multi-file",
+        "hidden-tests"
+    ],
+    "difficulty": "hard",
+    "language": "python"
+}

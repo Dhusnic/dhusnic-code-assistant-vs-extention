@@ -1,0 +1,1 @@
+ACME_UPLOAD_ROOT=/var/lib/acme/uploads

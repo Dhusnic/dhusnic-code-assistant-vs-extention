@@ -1,0 +1,10 @@
+{
+    "name": "cursor-pagination",
+    "prompt": "Offset paging over orders is slow and skips rows when orders are added while a client pages. Change listOrders in src/db/orders.js from listOrders(offset, limit) to cursor paging: listOrders({ after, limit = 50 }) returns { items, nextCursor }, where items are the orders with an id greater than `after` (all orders when after is undefined) in ascending id order, at most `limit` of them, and nextCursor is the id of the last returned item, or null when there are no more orders after it. Update every caller in the project to the new API.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["api-change", "multi-file", "hidden-tests"],
+    "difficulty": "hard",
+    "language": "javascript"
+}

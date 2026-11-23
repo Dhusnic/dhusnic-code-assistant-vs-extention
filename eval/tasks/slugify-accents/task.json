@@ -1,0 +1,10 @@
+{
+    "name": "slugify-accents",
+    "prompt": "Article URLs for titles with accents look broken: \"Crème Brûlée\" becomes \"cr-me-br-l-e\". Change slugify so accented Latin letters become their plain letters (\"creme-brulee\"). Runs of separators must collapse into a single dash, and the slug never starts or ends with a dash.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "hidden-tests", "search"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

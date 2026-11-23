@@ -1,0 +1,10 @@
+{
+    "name": "config-deep-merge",
+    "prompt": "Ops reports that a config file that sets only `db.host` drops the default database port and pool settings, and the service then connects to port undefined. In src/config.js, nested settings must be merged key by key with the defaults (at any depth); arrays and plain values in the user's config replace the default. DEFAULTS must never be modified.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "hidden-tests", "config"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

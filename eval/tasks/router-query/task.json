@@ -1,0 +1,10 @@
+{
+    "name": "router-query",
+    "prompt": "Add query-string support to the Router in src/router.js. Handlers must receive req.query, an object of the query parameters (a key given more than once becomes an array of its values in order; '+' and %-escapes are decoded). The query string must not affect route matching (today /users/7?tab=x answers 404). Path parameters must be percent-decoded too (/users/ann%20lee gives params.id 'ann lee'), and a malformed escape in the path answers { status: 400 } instead of throwing.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["feature", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

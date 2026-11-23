@@ -1,0 +1,15 @@
+{
+    "name": "sql-params",
+    "prompt": "src/db/where.js builds SQL WHERE clauses by pasting values into the string, which breaks on names like O'Brien and allows SQL injection. Change buildWhere(filters) to return { sql, params }: sql uses numbered placeholders ($1, $2, ... in the order the filters are given), and params holds the values. Keep the current shape of the clauses: equality for plain values, IN ($1, $2, ...) for arrays (an empty array becomes the always-false clause 1 = 0 with no params), IS NULL for null, and an empty filter object gives an empty sql string. Column names must be plain identifiers (letters, digits, underscore, not starting with a digit); anything else throws an Error. Update every caller in src/ to the new return value so the repositories pass the params to db.query(sql, params).",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 900,
+    "tags": [
+        "security",
+        "api-change",
+        "multi-file",
+        "hidden-tests"
+    ],
+    "difficulty": "hard",
+    "language": "javascript"
+}

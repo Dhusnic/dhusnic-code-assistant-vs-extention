@@ -4,5 +4,7 @@
     "check": "node __grade__.js",
     "hiddenTests": "hidden",
     "timeoutSeconds": 600,
-    "tags": ["refactor", "multi-file"]
+    "tags": ["refactor", "multi-file"],
+    "difficulty": "medium",
+    "language": "javascript"
 }

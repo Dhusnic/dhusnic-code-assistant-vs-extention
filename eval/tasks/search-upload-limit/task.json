@@ -1,0 +1,10 @@
+{
+    "name": "search-upload-limit",
+    "prompt": "Customers get error E_UPLOAD_TOO_LARGE when they upload a file of exactly 10 MiB, and some files a little smaller than that are rejected too. The documented limit for document uploads is 10 MiB (10 x 1024 x 1024 bytes), and a file of exactly that size is allowed. Find where the limit is enforced and fix it. Other limits (such as avatars) must not change.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "search", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

@@ -1,0 +1,16 @@
+{
+    "name": "py-parse-duration",
+    "prompt": "parse_duration in timeutil/duration.py only understands a single unit (\"90s\", \"5m\"). Make it accept a sequence of number+unit parts such as \"1h30m\", \"2d 4h\" or \"1h 0m 15s\" (spaces between parts are allowed) with the units d, h, m, s and ms, and return the total as a float number of seconds. Numbers may be decimal (\"1.5h\"). An empty string, an unknown unit, a part without a unit, or the same unit twice must raise ValueError. The existing tests are in tests/.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "requires": [
+        "python"
+    ],
+    "timeoutSeconds": 600,
+    "tags": [
+        "bugfix",
+        "hidden-tests"
+    ],
+    "difficulty": "medium",
+    "language": "python"
+}

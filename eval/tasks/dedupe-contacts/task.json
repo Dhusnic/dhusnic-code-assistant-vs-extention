@@ -1,0 +1,10 @@
+{
+    "name": "dedupe-contacts",
+    "prompt": "Add a generic helper uniqueBy(items, keyFn) to src/utils/array.js that returns the items with duplicate keys removed, keeping the first occurrence and the original order. Then use it in mergeContacts (src/contacts.js) so that merging two contact lists no longer produces duplicates: two contacts are the same person when their emails match after trimming and lowercasing. Contacts without an email are always kept.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["feature", "multi-file", "hidden-tests"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

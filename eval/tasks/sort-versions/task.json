@@ -1,0 +1,10 @@
+{
+    "name": "sort-versions",
+    "prompt": "The release picker shows 1.9.0 as newer than 1.10.0. Fix src/versions.js: sortVersions must order versions numerically part by part (MAJOR.MINOR.PATCH, an optional leading \"v\" is kept in the output), a pre-release such as 2.0.0-rc.1 comes before 2.0.0, and pre-release identifiers compare dot-part by dot-part (numerically when both parts are numbers, so beta.2 < beta.10). latest() returns the newest final release, and the newest pre-release only when there is no final release at all.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

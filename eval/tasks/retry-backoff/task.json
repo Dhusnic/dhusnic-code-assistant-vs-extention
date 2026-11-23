@@ -1,0 +1,11 @@
+{
+    "name": "retry-backoff",
+    "prompt": "The tests in test/retry.test.js fail. Fix retry() in src/retry.js so that they pass: it must call fn up to `attempts` times in total, wait baseDelayMs, then twice that, then four times that (exponential backoff) between attempts, never wait after the last attempt, and reject with the last error.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "mustNotChange": ["test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "failing-test"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

@@ -1,0 +1,10 @@
+{
+    "name": "invoice-rounding",
+    "prompt": "Finance found invoice totals that are off by a cent. Fix invoiceTotals in src/invoice.js to follow these rules: each line amount is price x quantity rounded to whole cents, half away from zero (credit lines can be negative); the subtotal is the sum of the rounded lines; tax is subtotal x taxRate, rounded the same way; total = subtotal + tax. Do the arithmetic in integer cents so floating-point errors (like 1.005 x 100 = 100.4999...) can't change the result. It still returns { subtotal, tax, total } as numbers in currency units.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "hidden-tests", "money"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

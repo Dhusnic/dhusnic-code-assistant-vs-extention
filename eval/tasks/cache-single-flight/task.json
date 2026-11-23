@@ -1,0 +1,15 @@
+{
+    "name": "cache-single-flight",
+    "prompt": "Under load the user service hits the database many times for the same user: src/cache.js getOrLoad(key, loader) only stores a value after the loader resolves, so concurrent requests for the same key all call the loader. Change TtlCache.getOrLoad so concurrent calls for the same key share one in-flight load (the loader runs once and every caller gets the same result). A rejected load must not be cached: the callers waiting on it get the rejection, and the next call tries again. Values still expire after ttlMs (the clock comes from the constructor's `now` option). src/userService.js uses the cache; its behavior must stay the same otherwise.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 900,
+    "tags": [
+        "bugfix",
+        "concurrency",
+        "multi-file",
+        "hidden-tests"
+    ],
+    "difficulty": "hard",
+    "language": "javascript"
+}
