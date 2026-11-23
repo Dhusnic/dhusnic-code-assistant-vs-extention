@@ -114,6 +114,8 @@ export interface AgentDeps {
   selfReview?: () => SelfReviewSetting;
   /** A file's content before `turn` changed it (its checkpoint backup); undefined when the turn did not capture it. */
   original?: (turn: number, absPath: string) => Promise<{ existed: boolean; data?: Buffer } | undefined>;
+  /** Repo map section for the system prompt (repoMap.ts), fetched once per turn; '' when off or not built yet. */
+  repoMap?: () => Promise<string> | string;
 }
 
 export interface SpawnRequest {

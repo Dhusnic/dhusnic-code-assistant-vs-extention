@@ -315,7 +315,7 @@ export class Agent {
     if (early.length) { dirty = true; this.noteChanged(early); }
     try {
       let checks = await this.loadChecks();
-      const checksSection = checksPromptSection(checks);
+      const checksSection = [checksPromptSection(checks), await this.loadRepoMap()].filter(Boolean).join('\n\n');
       const submitted = await this.deps.guard?.onPrompt?.(userText, signal);
       if (submitted?.blocked) {
         const text = `Blocked by a hook: ${submitted.reason ?? 'no reason given'}`;
@@ -574,6 +574,11 @@ export class Agent {
   private async loadChecks(): Promise<CheckCommand[]> {
     if (this.deps.subagent || !this.deps.checks) { return []; }
     try { return (await this.deps.checks()).filter((c) => c && typeof c.command === 'string' && c.command.trim()); } catch { return []; }
+  }
+
+  /** The repo map section (repoMap.ts), once per turn so every request of the turn sends the same system prompt. */
+  private async loadRepoMap(): Promise<string> {
+    try { return (await this.deps.repoMap?.()) ?? ''; } catch { return ''; }
   }
 
   /**

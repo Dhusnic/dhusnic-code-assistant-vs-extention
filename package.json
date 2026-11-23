@@ -350,6 +350,20 @@
                         "markdownDescription": "Embedding model on the company gateway (`{baseUrl}/embeddings`) used to rank `search_code` results by meaning as well as words (hybrid search). Empty = off: word ranking only, nothing is sent. `auto` = the first model listed by the gateway whose id contains \"embed\". Code chunks are masked like chat when `redactSecrets` is on; vectors are cached in the extension's storage, never in the workspace.",
                         "order": 4
                     },
+                    "infraonAssistant.repoMap.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Give the agents a repo map: a compact overview of the workspace (folders, and the most used files with their main classes and functions) in the system prompt, plus a repo_map tool to see more. Built locally in memory; nothing leaves the machine.",
+                        "order": 4
+                    },
+                    "infraonAssistant.repoMap.maxTokens": {
+                        "type": "number",
+                        "default": 1500,
+                        "minimum": 200,
+                        "maximum": 8000,
+                        "description": "Size of the repo map in the system prompt, in tokens (about 3.5 characters each).",
+                        "order": 4
+                    },
                     "infraonAssistant.maxConcurrentAgents": {
                         "type": "number",
                         "default": 4,

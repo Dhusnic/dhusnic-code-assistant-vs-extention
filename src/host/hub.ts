@@ -20,6 +20,7 @@ import { filterFiles } from '../core/mentions';
 import { Effort, Mode, isEffort, isMode } from '../core/policy';
 import { AgentSettings, AgentSpec, AgentWorktreeRef, SessionManager } from '../core/runtime';
 import { FileIndex, findRipgrep, ripgrepCandidates } from '../core/search';
+import { DEFAULT_PROMPT_TOKENS, RepoMaps, repoMapTool } from '../core/repoMap';
 import { SessionStore2, StoredSessionSummary } from '../core/store';
 import { ScopeContext, SessionScope, workspaceKey } from '../core/workspaceScope';
 import { UsageTracker } from '../core/usage';
@@ -55,6 +56,9 @@ export class Hub {
   readonly usage: UsageTracker;
   readonly index: FileIndex;
   private fsOptions: FsToolsOptions;
+  /** Repo maps per folder (system prompt section and the repo_map tool); the primary folder shares the file index. */
+  private readonly repoMaps = new RepoMaps((root) => (root === this.root ? this.index : new FileIndex(root)));
+  private readonly repoMapTool = repoMapTool(this.repoMaps);
   private fsTools: ReturnType<typeof createFsTools>;
   private mcp: McpManager;
   private readonly editDiagnostics = createEditDiagnostics(() => this.cfg.get<boolean>('diagnosticsAfterEdit', true));
@@ -313,7 +317,7 @@ export class Hub {
 
   /** Every tool an agent of session `sid` can use (web tools keep their sources and approvals per session). */
   /** browserKey: whose test browser the testing tools drive (each sub-agent gets its own, so parallel testers do not collide). */
-  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
+  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, ...this.repoMapTools(), ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
 
   checkpointsFor(sid: string, aid: string): CheckpointStore { return new CheckpointStore(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid, aid)); }
 
@@ -412,6 +416,14 @@ export class Hub {
     return reported ?? this.cfg.get<number>('contextWindow', 262144);
   }
 
+  private repoMapTools() { return this.cfg.get<boolean>('repoMap.enabled', true) ? [this.repoMapTool] : []; }
+
+  /** The repo map for the system prompt; '' when turned off or not built within the time box (it is ready next turn). */
+  private repoMapSection(root: string): Promise<string> | string {
+    if (!vscode.workspace.workspaceFolders?.length || !this.cfg.get<boolean>('repoMap.enabled', true)) { return ''; }
+    return this.repoMaps.promptSection(root, { budgetTokens: this.cfg.get<number>('repoMap.maxTokens', DEFAULT_PROMPT_TOKENS) });
+  }
+
   /** All workspace folders (multi-root workspaces have several). */
   workspaceRoots(): WorkspaceRoot[] {
     return (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, path: f.uri.fsPath }));
@@ -436,6 +448,7 @@ export class Hub {
       tools: () => (sub ? toolsForType(this.allTools(sid, `${sid}#${aid}`), sub, DELEGATION_TOOLS) : this.allTools(sid)),
       memory: () => this.loadMemory(),
       checks: sub ? undefined : () => this.projectChecks(root),
+      repoMap: () => this.repoMapSection(root),
       // An agent in its own worktree works outside the workspace: workspace changes and folders are not its own.
       fileChanges: root === this.root ? this.journal : undefined,
       roots: root === this.root ? () => this.workspaceRoots() : undefined,

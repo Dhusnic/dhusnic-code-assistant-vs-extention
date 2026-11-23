@@ -71,7 +71,7 @@ export interface CodeHit {
   hybrid?: boolean;
 }
 
-function skipFile(rel: string): boolean {
+export function skipFile(rel: string): boolean {
   if (SKIP_NAME.test(rel)) { return true; }
   const base = rel.slice(rel.lastIndexOf('/') + 1).toLowerCase();
   const dot = base.indexOf('.');
