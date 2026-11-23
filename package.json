@@ -424,6 +424,12 @@
                         "description": "Commands that check this project after code changes, run in order (for example `npm run lint`, `npm test`). Overrides detection. Leave empty to detect them.",
                         "order": 10
                     },
+                    "infraonAssistant.checks.relatedTestsFirst": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "When a project check fails and the agent fixes it, check the fix with only the tests related to the changed files first (jest --findRelatedTests, vitest related, the matching pytest or node --test files, the changed Go packages), for faster feedback. The full checks always run before the agent finishes. Off = every fix round runs the full checks.",
+                        "order": 10
+                    },
                     "infraonAssistant.diagnosticsAfterEdit": {
                         "type": "boolean",
                         "default": true,

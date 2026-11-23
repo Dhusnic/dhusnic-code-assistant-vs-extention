@@ -30,7 +30,8 @@ User types in the session tab (media/session.js)
        → tool calls: scheduler.ts groups independent calls to run in parallel
        → each call: permission check (permissions.ts, hooks.ts, guard) → approval if needed → tool.run
        → results are added to the history; compaction.ts summarizes when the context is nearly full
-       → after edits: verify.ts runs the project's checks; failures go back to the model
+       → after edits: verify.ts runs the project's checks; failures go back to the model (a fix round
+         is checked with the related tests first, then the full checks give the verdict: checks.ts)
   → UI events (tokens, tool cards, approvals, todos) → Runtime transcript → webview
 ```
 

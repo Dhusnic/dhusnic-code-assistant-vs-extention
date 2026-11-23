@@ -6,7 +6,8 @@
  * Split across modules, all re-exported from here so callers import from './agent' only:
  *   agentContracts.ts  the interfaces to the UI, the safety layer, the host's dependencies and sub-agent spawning
  *   agentTools.ts      the built-in tools as the model sees them, and the system prompt
- *   checks.ts          which project checks to run for a set of changes, and how their output is read
+ *   checks.ts          which project checks to run for a set of changes, and how their output is read. A fix round is
+ *                      verified with the related tests first; the full checks always give the final verdict
  *   loopGuard.ts       notices the model repeating itself within a turn, and the reminders that nudge it out
  *   selfReview.ts      the once-per-turn fresh-context review of the turn's diff before a turn that changed files ends
  */
@@ -26,7 +27,8 @@ import { FileReadTracker, resolveIn } from './fstools';
 import { LoopGuard, withNudge } from './loopGuard';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
 import { selfReview, shouldSelfReview } from './selfReview';
-import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, sameDigest, scopeChecks } from './checks';
+import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, narrowCheck, narrowedLabel, sameDigest, scopeChecks } from './checks';
+import { findTestFiles } from './verify';
 import {
   AGENT_TOOL, DELEGATION_TOOLS, PLAN_SPEC, PLAN_TOOL, QUESTION_SPEC, QUESTION_TOOL, SEND_SPEC, SEND_TOOL, TODO_SPEC, TODO_TOOL,
   agentToolSpec, buildSystemPrompt, queuedMessageText,
@@ -48,6 +50,12 @@ export const MAX_CUT_OFF_RECOVERIES = 3;
 /** How many times one turn may compact and retry after the model said the request was too long. */
 export const MAX_OVERFLOW_RETRIES = 2;
 const isJson = (s: string): boolean => { try { JSON.parse(s || '{}'); return true; } catch { return false; } };
+
+/** How a run of the project checks ended; `index` is the check it stopped at (checks.length when all passed). */
+interface CheckOutcome {
+  status: 'passed' | 'failed' | 'skipped'; index: number;
+  failed?: { name: string; command: string; output: string; narrowed: boolean };
+}
 
 /** Tokens one model call consumed: the gateway's own count, or an estimate when it does not report usage. */
 export function tokensSpent(res: Pick<StreamResult, 'usage' | 'content' | 'toolCalls'>, sent: ChatMessage[]): number {
@@ -395,16 +403,34 @@ export class Agent {
           const scoped = dirty ? scopeChecks(checks, [...this.track.changed]) : [];
           if (dirty && checks.length && !scoped.length) { dirty = false; ui.info('Only documentation changed: project checks skipped.'); }
           // The model already ran every check after its last change and they passed: no need to run them again.
-          if (dirty && this.alreadyVerified(checks, scoped)) { dirty = false; }
+          if (dirty && this.alreadyVerified(checks)) { dirty = false; }
           /** Checks still failing after the last allowed fix attempt: a review of that diff would only add noise. */
           let checksUnresolved = false;
           if (dirty && scoped.length && run.mode !== 'plan' && this.toolFor('run_command')) {
             dirty = false;
-            const failed = await this.runChecks(scoped, run, ui, signal, turn);
+            // A fix attempt is verified with the tests related to the changed files first (fast feedback). A narrowed
+            // run is never the verdict: when it passes, the full form runs before the turn may finish.
+            const plan = checkRounds > 0 ? await this.narrowChecks(scoped) : scoped;
+            const narrowed = plan.filter((c) => c.narrowed);
+            if (narrowed.length) { ui.info(`Running the related tests first: ${narrowed.map(narrowedLabel).join(', ')}.`); }
+            let outcome = await this.runChecks(plan, run, ui, signal, turn);
+            if (outcome.status === 'passed' && narrowed.length) {
+              ui.info(`Related tests passed; running the full suite before finishing: ${narrowed.map((c) => checkLabel(c.narrowed!.full.command)).join(', ')}.`);
+              outcome = await this.runChecks(narrowed.map((c) => c.narrowed!.full), run, ui, signal, turn);
+            }
+            let failed = outcome.failed;
             // A fix attempt that leaves exactly the same failure behind is no progress: stop instead of retrying.
-            const digest = failed ? digestCheckOutput(failed.name, failed.command, failed.output, CHECK_OUTPUT_CHARS) : '';
-            const stuck = sameDigest(digest, lastDigest);
+            let digest = failed ? digestCheckOutput(failed.name, failed.command, failed.output, CHECK_OUTPUT_CHARS) : '';
+            let stuck = sameDigest(digest, lastDigest);
+            // A narrowed failure that ends the retries: the full form (from that check on) gives the verdict instead.
+            if (failed?.narrowed && (checkRounds >= maxCheckRounds || stuck)) {
+              outcome = await this.runChecks(plan.slice(outcome.index).map((c) => c.narrowed?.full ?? c), run, ui, signal, turn);
+              failed = outcome.failed;
+              digest = failed ? digestCheckOutput(failed.name, failed.command, failed.output, CHECK_OUTPUT_CHARS) : '';
+              stuck = sameDigest(digest, lastDigest);
+            }
             lastDigest = digest;
+            if (outcome.status === 'passed') { ui.info(`Project checks passed: ${scoped.map((c) => c.name).join(', ')}.`); }
             if (failed) {
               if (checkRounds < maxCheckRounds && !stuck) {
                 checkRounds++;
@@ -530,10 +556,10 @@ export class Agent {
   }
 
   /** Every project check already ran, and passed, after the last change. */
-  private alreadyVerified(checks: CheckCommand[], scoped: CheckCommand[]): boolean {
+  private alreadyVerified(checks: CheckCommand[]): boolean {
     const passed = (cmd: string) => this.track.verified.some((v) => v.ok && v.label === checkLabel(cmd));
-    // The full command, or its related form for these files, counts.
-    return checks.length > 0 && checks.every((c, i) => passed(c.command) || (scoped[i] !== undefined && passed(scoped[i].command)));
+    // Only the full commands count: a run limited to related tests is never the verdict.
+    return checks.length > 0 && checks.every((c) => passed(c.command));
   }
 
   /**
@@ -591,20 +617,31 @@ export class Agent {
 
   /**
    * Runs the checks in order through run_command, so permission rules, approvals, hooks and the audit log apply.
-   * Stops at the first failure and returns it; returns undefined when all pass or the user declined to run them.
+   * Stops at the first failure and returns it (with its index), or at the first check the user declined to run.
    */
-  private async runChecks(checks: CheckCommand[], run: RunOptions, ui: AgentUi, signal: AbortSignal, turn: number): Promise<{ name: string; command: string; output: string } | undefined> {
-    const passed: string[] = [];
+  private async runChecks(checks: CheckCommand[], run: RunOptions, ui: AgentUi, signal: AbortSignal, turn: number): Promise<CheckOutcome> {
     for (let i = 0; i < checks.length; i++) {
       const c = checks[i];
       const out = await this.execTool(`check_${turn}_${i}_${Date.now().toString(36)}`, 'run_command', JSON.stringify({ command: c.command, timeout_seconds: c.timeoutSeconds }), run, ui, signal, turn);
-      this.noteResult('run_command', JSON.stringify({ command: c.command }), out);
-      if (NOT_RUN.test(out)) { ui.info(`Project checks skipped (${c.name} was not run).`); return undefined; }
-      if (exitCodeOf(out) !== 0) { return { name: c.name, command: c.command, output: out }; }
-      passed.push(c.name);
+      // A narrowed run is no evidence for the verification summary: only the full check counts there.
+      if (!c.narrowed) { this.noteResult('run_command', JSON.stringify({ command: c.command }), out); }
+      if (NOT_RUN.test(out)) { ui.info(`Project checks skipped (${c.name} was not run).`); return { status: 'skipped', index: i }; }
+      if (exitCodeOf(out) !== 0) { return { status: 'failed', index: i, failed: { name: c.name, command: c.command, output: out, narrowed: !!c.narrowed } }; }
     }
-    ui.info(`Project checks passed: ${passed.join(', ')}.`);
-    return undefined;
+    return { status: 'passed', index: checks.length };
+  }
+
+  /**
+   * The checks, each test check that has a related form narrowed to this turn's changed files (checks.ts narrowCheck);
+   * a check whose mapping is uncertain stays full. pytest and node --test map to the project's test files.
+   */
+  private async narrowChecks(checks: CheckCommand[]): Promise<CheckCommand[]> {
+    const changed = [...this.track.changed];
+    return Promise.all(checks.map(async (c) => {
+      if (!c.related) { return c; }
+      const testFiles = c.related.testGlobs ? await findTestFiles(this.deps.root, c.related.testGlobs).catch(() => []) : [];
+      return narrowCheck(c, changed, testFiles) ?? c;
+    }));
   }
 
   private hasQueued(): boolean {
