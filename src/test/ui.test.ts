@@ -52,7 +52,16 @@ test('session.js handles every transcript event type the runtime can emit', () =
 });
 
 test('session view persists its session id so VS Code can restore the tab after a restart', () => {
-  assert.match(read('session.js'), /vscode\.setState\(\{ sessionId: state\.sessionId \}\)/);
+  // The same session keeps what is saved with it (its input history); another session starts with just its id.
+  assert.match(read('session.js'), /vscode\.setState\(prev\.sessionId === state\.sessionId \? prev : \{ sessionId: state\.sessionId \}\)/);
+});
+
+test('session header has the "your messages" clock button, and successful edits show a pen', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'core', 'html.js'), 'utf8');
+  assert.match(html, /id="histBtn"/);
+  assert.match(read('session.js'), /\$\('histBtn'\)\.onclick/);
+  assert.match(read('chat.css'), /\.tool\.edit\.ok \.status::before \{ content: '\\270E'/);
+  assert.match(read('session.js'), /m\.kind === 'edit' \? ' edit' : ''/);
 });
 
 test('mermaid is bundled locally and initialised in strict security mode', () => {

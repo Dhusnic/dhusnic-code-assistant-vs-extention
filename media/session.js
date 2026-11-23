@@ -240,6 +240,7 @@
       cur = null;
       const q = add('user mid', esc(m.text));
       q.dataset.raw = m.text;
+      if (m.at) { q.dataset.at = m.at; }
       q.insertAdjacentHTML('afterbegin', '<div class="mid-tag">Sent while the agent was working</div>');
       if (m.thumbs && m.thumbs.length) { q.insertAdjacentHTML('beforeend', `<div class="thumbs">${m.thumbs.map((t) => `<img src="${esc(t)}" alt="screenshot">`).join('')}</div>`); }
       return;
@@ -257,6 +258,7 @@
     openTurn();
     const d = add('user', esc(m.text));
     d.dataset.raw = m.text;   // no force here: send() already jumped; a queued message starting later must not yank a reader
+    if (m.at) { d.dataset.at = m.at; }
     if (m.thumbs && m.thumbs.length) { d.insertAdjacentHTML('beforeend', `<div class="thumbs">${m.thumbs.map((t) => `<img src="${esc(t)}" alt="screenshot">`).join('')}</div>`); }
     if (m.files && m.files.length) { d.insertAdjacentHTML('beforeend', `<div class="att">${m.files.map((f) => `<span>${f.startsWith('🖼') ? '' : '📎 '}${esc(f)}</span>`).join('')}</div>`); }
     if (m.turn !== undefined) {
@@ -338,7 +340,8 @@
     if (m.name === 'todo_write') { return; }   // represented by the task-list card
     cur = null; clearEmpty();
     const d = document.createElement('details');
-    d.className = `tool running${m.name === 'agent' ? ' agent-tool' : ''}`; d.id = `t-${m.id}`;
+    // Edit-kind tools (file writes and edits) finish with a pen instead of a tick, so changes stand out from reads.
+    d.className = `tool running${m.name === 'agent' ? ' agent-tool' : ''}${m.kind === 'edit' ? ' edit' : ''}`; d.id = `t-${m.id}`;
     const stat = m.diff ? ` <span class="muted">+${m.diff.added} −${m.diff.removed}</span>` : '';
     d.innerHTML = `<summary><span class="status"></span><span class="label">${esc(m.detail || m.name)}${stat}</span></summary>${m.diff ? diffHtml(m.diff) : `<pre>${esc(m.args || '')}</pre>`}`;
     if (m.name === 'agent') { d.open = true; }
@@ -1008,6 +1011,66 @@
     el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600);
   }
 
+  /* ---------- your messages (clock button): every message sent in this view, oldest first; click one to jump to it.
+   * Built from the transcript on screen, so it always matches it (after a rewind, a replay or switching agents). ---------- */
+  const clockTime = (at) => {
+    if (!at) { return ''; }
+    const d = new Date(Number(at)), t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })}, ${t}`;
+  };
+  const oneLine = (s) => s.replace(/\s+/g, ' ').trim().slice(0, 160) || '(attachments only)';
+  $('histBtn').onclick = () => { if (openMenu?.classList.contains('hist-menu')) { closeMenu(); } else { messagesMenu(); } };
+  function messagesMenu() {
+    closeMenu();
+    const els = [...log.querySelectorAll('.msg.user')];
+    const m = document.createElement('div'); m.className = 'menu hist-menu'; m.setAttribute('role', 'menu');
+    m.insertAdjacentHTML('beforeend', `<div class="mhead">Your messages${els.length ? ` (${els.length})` : ''}</div>`);
+    if (!els.length) {
+      m.insertAdjacentHTML('beforeend', '<div class="mempty">Nothing sent yet. Every message you send in this session is listed here; click one to jump to it.</div>');
+      placeBelow(m, $('histBtn'), true); return;
+    }
+    const all = els.map((el, i) => ({ el, n: i + 1, text: (el.dataset.raw ?? el.textContent ?? '').trim() }));
+    const filter = document.createElement('input');
+    filter.type = 'search'; filter.className = 'hist-filter'; filter.placeholder = 'Filter your messages'; filter.setAttribute('aria-label', 'Filter your messages');
+    const list = document.createElement('div'); list.className = 'hist-list';
+    m.append(filter, list);
+    let rows = all, active = all.length - 1;   // opens on the newest message
+    const render = () => {
+      const q = filter.value.trim().toLowerCase();
+      rows = q ? all.filter((r) => r.text.toLowerCase().includes(q)) : all;
+      active = Math.max(0, Math.min(active, rows.length - 1));
+      list.innerHTML = rows.length ? rows.map((r, i) => `<div class="item${i === active ? ' active' : ''}" data-i="${i}" role="menuitem" title="${esc(r.text.slice(0, 600))}">
+          <span class="hn">#${r.n}</span><span class="hprev">${esc(oneLine(r.text))}</span><span class="ht">${r.el.classList.contains('mid') ? '<span class="hmid">while working</span>' : ''}${esc(clockTime(r.el.dataset.at))}</span></div>`).join('')
+        : '<div class="mempty">No message matches.</div>';
+      list.querySelector('.item.active')?.scrollIntoView({ block: 'nearest' });
+    };
+    const pick = (r) => { if (!r) { return; } closeMenu(); jumpToMessage(r.el); };
+    list.addEventListener('mousedown', (e) => { const it = e.target.closest('.item[data-i]'); if (it) { e.preventDefault(); pick(rows[Number(it.dataset.i)]); } });
+    filter.addEventListener('input', () => { active = Infinity; render(); });   // the newest match (render clamps it)
+    filter.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (rows.length) { active = (active + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length; render(); } }
+      else if (e.key === 'Enter') { e.preventDefault(); pick(rows[active]); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeMenu(); input.focus(); }
+    });
+    render();
+    placeBelow(m, $('histBtn'), true);
+    list.querySelector('.item.active')?.scrollIntoView({ block: 'nearest' });
+    filter.focus();
+  }
+  /** Scrolls a sent message into view at the top of the log (below its turn's pinned header when it was sent mid-turn). */
+  function jumpToMessage(el) {
+    if (!el.isConnected) { return; }
+    const turnBox = el.parentElement?.classList.contains('turn') ? el.parentElement : null;
+    const opensTurn = turnBox && turnBox.firstElementChild === el;
+    const target = opensTurn ? turnBox : el;
+    const header = !opensTurn && turnBox ? turnBox.firstElementChild.offsetHeight + 16 : 8;
+    const top = log.scrollTop + target.getBoundingClientRect().top - log.getBoundingClientRect().top - (opensTurn ? 0 : header);
+    pinned = false; jumpBtn.hidden = false;   // reading an older message: new output must not pull the view away from it
+    log.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1600);
+  }
+
   /* ---------- context usage popup ---------- */
   const CTX_COLORS = { system: '#d97706', tools: '#3b82f6', mcp: '#22c55e', agents: '#a855f7', memory: '#eab308', messages: '#ef4444', buffer: '#06b6d4', free: 'transparent' };
   $('ctxRing').onclick = () => { if ($('ctxPop')) { $('ctxPop').remove(); return; } post({ type: 'contextDetails' }); };
@@ -1071,7 +1134,7 @@
     m.style.left = `${Math.max(4, Math.min(alignRight ? r.right - m.offsetWidth : r.left, innerWidth - m.offsetWidth - 4))}px`;
     openMenu = m;
   }
-  document.addEventListener('mousedown', (e) => { if (openMenu && !openMenu.contains(e.target) && !e.target.closest('.pill, #agentBtn, #bmBtn')) { closeMenu(); } });
+  document.addEventListener('mousedown', (e) => { if (openMenu && !openMenu.contains(e.target) && !e.target.closest('.pill, #agentBtn, #bmBtn, #histBtn')) { closeMenu(); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openMenu) { closeMenu(); } });
 
   /* ================================================================ composer */
@@ -1114,9 +1177,58 @@
     const id = b.closest('.q-item').dataset.id;
     post({ type: 'unqueue', id, edit: b.dataset.q === 'edit' });
   });
+  /* ---------- input history: Up / Down recall the messages sent in this session (slash commands too), like a shell.
+   * Kept in the webview state per session, so it survives the panel being hidden and VS Code reloading; a session
+   * opened without one is seeded from its transcript. Recalling only fills the box: nothing is sent until Enter. ---------- */
+  const HISTORY_MAX = 200;
+  let sentHistory = [], histFor = '', histIdx = -1, histDraft = '';
+  const savedState = () => { try { return vscode.getState() || {}; } catch { return {}; } };
+  function saveHistory() { try { vscode.setState({ ...savedState(), sessionId: state.sessionId, inputHistory: sentHistory }); } catch { /* not persisted */ } }
+  function pushHistory(t) {
+    if (!t || sentHistory[sentHistory.length - 1] === t) { return; }
+    sentHistory.push(t);
+    if (sentHistory.length > HISTORY_MAX) { sentHistory.splice(0, sentHistory.length - HISTORY_MAX); }
+  }
+  /** On a session's first replay: its saved history, else the messages in its transcript. Not for sub-agent views. */
+  function seedHistory(events) {
+    if (state.viewingSub || histFor === state.sessionId) { return; }
+    histFor = state.sessionId; histIdx = -1; sentHistory = [];
+    const saved = savedState();
+    if (saved.sessionId === state.sessionId && Array.isArray(saved.inputHistory) && saved.inputHistory.length) {
+      sentHistory = saved.inputHistory.filter((t) => typeof t === 'string').slice(-HISTORY_MAX);
+      return;
+    }
+    for (const ev of events) {
+      if (ev.type === 'userMsg' && !ev.notification && typeof ev.text === 'string' && !ev.text.startsWith('🔔')) { pushHistory(ev.text.trim()); }
+    }
+    saveHistory();
+  }
+  const caretOnFirstLine = () => input.selectionStart === input.selectionEnd && !input.value.slice(0, input.selectionStart).includes('\n');
+  const caretOnLastLine = () => input.selectionStart === input.selectionEnd && !input.value.slice(input.selectionEnd).includes('\n');
+  /** older: Up (one step back); otherwise Down (one step forward, ending at what was being typed). False when at an end. */
+  function recall(older) {
+    const n = sentHistory.length;
+    if (older) {
+      if (histIdx >= n - 1) { return false; }
+      if (histIdx === -1) { histDraft = input.value; }
+      histIdx++;
+    } else {
+      if (histIdx < 0) { return false; }
+      histIdx--;
+    }
+    input.value = histIdx === -1 ? histDraft : sentHistory[n - 1 - histIdx];
+    // Up leaves the caret at the start so the next Up keeps going back; Down at the end so the next Down goes forward.
+    const at = older ? 0 : input.value.length;
+    input.setSelectionRange(at, at);
+    hidePopup(); autosize();
+    return true;
+  }
+
   function send() {
     const t = input.value.trim();
     if (!t && !images.length) { return; }
+    if (t) { pushHistory(t); saveHistory(); }
+    histIdx = -1; histDraft = '';
     post({ type: 'send', text: t, images: images.map(({ name, mime, dataUrl, thumb }) => ({ name, mime, dataUrl, thumb })) });
     input.value = ''; images = []; renderAttach(); autosize(); hidePopup();
     scroll(true);   // sending always jumps to the latest and follows again, even when queued or sent mid-turn
@@ -1157,9 +1269,14 @@
   }
   $('title').onclick = editTitle;
   $('titleEdit').onclick = editTitle;
-  input.addEventListener('input', () => { autosize(); onInputChange(); });
+  input.addEventListener('input', () => { histIdx = -1; autosize(); onInputChange(); });   // typing makes the text a new draft
   input.addEventListener('keydown', (e) => {
     if (popupKey(e)) { return; }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
+      // Only from the first (Up) or last (Down) line, so moving through a multi-line message still works.
+      if (e.key === 'ArrowUp' ? caretOnFirstLine() && recall(true) : caretOnLastLine() && recall(false)) { e.preventDefault(); }
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     else if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); post({ type: 'cycleMode' }); }
   });
@@ -1280,7 +1397,13 @@
   /* ================================================================ host messages */
   window.addEventListener('message', ({ data: m }) => {
     switch (m.type) {
-      case 'init': logo = m.logo; Object.assign(state, m.state); vscode.setState({ sessionId: state.sessionId }); refreshPills(); break;
+      case 'init': {
+        logo = m.logo; Object.assign(state, m.state);
+        // Keep this session's input history; a different session in this panel starts clean.
+        const prev = savedState();
+        vscode.setState(prev.sessionId === state.sessionId ? prev : { sessionId: state.sessionId });
+        refreshPills(); break;
+      }
       case 'state': Object.assign(state, m.state); refreshPills(); break;
       case 'replay': {
         Object.assign(state, m.state); refreshPills();
@@ -1289,6 +1412,7 @@
         replaying = true;
         for (const ev of m.events) { apply(ev); }
         replaying = false;
+        seedHistory(m.events);
         log.querySelectorAll('.msg.assistant').forEach(markBookmark);
         if (!m.events.length) { showEmpty(); }
         renderQueue(m.queue || []);

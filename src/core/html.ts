@@ -9,7 +9,8 @@ const SUMMARY = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" str
 const BOLT = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M9 1.5L3.5 9h4L7 14.5 12.5 7h-4z"/></svg>';
 const MAP = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="6" width="4.5" height="4" rx="1"/><rect x="10" y="1.5" width="4.5" height="3.5" rx="1"/><rect x="10" y="11" width="4.5" height="3.5" rx="1"/><path d="M6 8h2M8 3.25V12.75M8 3.25h2M8 12.75h2"/></svg>';
 const BOOKMARK = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2.5h8v11l-4-2.8-4 2.8z"/></svg>';
-const PENCIL = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10.8 2.7l2.5 2.5-7.6 7.6-3.2.7.7-3.2z"/><path d="M9.4 4.1l2.5 2.5"/></svg>';
+const CLOCK = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="6"/><path d="M8 4.8V8l2.2 1.6"/></svg>';
+const PENCIL ='<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10.8 2.7l2.5 2.5-7.6 7.6-3.2.7.7-3.2z"/><path d="M9.4 4.1l2.5 2.5"/></svg>';
 const FILES = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 1.8h6L12.5 5v9.2h-9z"/><path d="M8 6.5v4M6 8.5h4"/></svg>';
 const CLIP ='<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10.5 4.5l-5 5a1.5 1.5 0 002 2l5.5-5.5a3 3 0 00-4-4L3.5 7.5a4.5 4.5 0 006.5 6.5l4-4"/></svg>';
 const SERVER = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 9h4"/></svg>';
@@ -42,6 +43,7 @@ export function buildSessionHtml(p: HtmlParts): string {
   <button class="icon-btn hdr-icon" id="mapBtn" title="Agent map: every agent in this session, live">${MAP}</button>
   <button class="icon-btn hdr-icon changes-btn" id="changesBtn" title="Review the files this session changed">${FILES}<span class="badge" id="changesCount" hidden></span></button>
   <button class="icon-btn hdr-icon" id="sumBtn" title="Summarize this session: a handoff you can paste into a new session">${SUMMARY}</button>
+  <button class="icon-btn hdr-icon" id="histBtn" title="Your messages in this session: click one to jump to it" aria-haspopup="menu">${CLOCK}</button>
   <button class="icon-btn hdr-icon" id="bmBtn" title="Bookmarked replies">${BOOKMARK}</button>
   <button class="icon-btn hdr-icon" id="sidebarBtn" title="Session manager">${LIST}</button>
   <button class="icon-btn hdr-icon" id="newBtn" title="New session in a new tab (Ctrl+Alt+N)">${PLUS}</button></div>

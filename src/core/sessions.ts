@@ -67,7 +67,10 @@ function isSession(s: any): s is Session {
 }
 
 export type UiItem =
-  | { type: 'user'; text: string; turn: number }
+  /** A message the user sent: one that started a turn, or (`mid`) one sent while the agent was working. */
+  | { type: 'user'; text: string; turn: number; at?: number; mid?: boolean }
+  /** A message the agent loop added on its own (checks failed, a cut-off reply, a Stop hook): shown as a note. */
+  | { type: 'note'; text: string }
   | { type: 'assistant'; text: string }
   | { type: 'tool'; id: string; name: string; detail: string; args: string; ok: boolean; result: string };
 
@@ -81,7 +84,12 @@ export function historyToUi(
   history.forEach((m, i) => {
     if (m.role === 'user') {
       if (m.content?.startsWith(SUMMARY_PREFIX)) { items.push({ type: 'assistant', text: '_Earlier conversation was summarized to save context._' }); return; }
-      items.push({ type: 'user', text: m.display ?? m.content ?? '', turn: Math.max(0, turnStarts.lastIndexOf(i)) });
+      const text = m.display ?? m.content ?? '';
+      const start = turnStarts.lastIndexOf(i);
+      if (start >= 0) { items.push({ type: 'user', text, turn: start, ...(m.at ? { at: m.at } : {}) }); return; }
+      // Inside a turn: only messages the user sent mid-turn carry a time; the rest were added by the agent loop.
+      const turn = Math.max(0, turnStarts.filter((s) => s < i).length - 1);
+      items.push(m.at ? { type: 'user', text, turn, at: m.at, mid: true } : { type: 'note', text });
     } else if (m.role === 'assistant') {
       if (m.content === SUMMARY_ACK_TEXT) { return; }
       if (m.content) { items.push({ type: 'assistant', text: m.content }); }

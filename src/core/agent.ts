@@ -279,6 +279,8 @@ export class Agent {
   }
 
   protected toolFor(name: string): Tool | undefined { return this.deps.tools().find((t) => t.spec.function.name === name); }
+  /** The kind of a tool by name ('read', 'edit', 'exec', ...), for the UI; undefined when no such tool is loaded. */
+  toolKind(name: string): string | undefined { try { return this.toolFor(name)?.kind; } catch { return undefined; } }
 
   protected specsFor(mode: Mode): ToolSpec[] {
     const specs = this.deps.tools().filter((t) => isAllowed(mode, t.kind)).map((t) => t.spec);
@@ -300,7 +302,7 @@ export class Agent {
     const active = this.deps.activeFile?.();
     const content = active ? `${userText}\n\n(Active editor file: ${active})` : userText;
     const shown = display ?? (content !== userText ? userText : undefined);
-    this.history.push({ role: 'user', content, ...(shown && shown !== content ? { display: shown } : {}) });
+    this.history.push({ role: 'user', content, ...(shown && shown !== content ? { display: shown } : {}), at: Date.now() });
     this.abort = new AbortController();
     const { signal } = this.abort;
     const run: RunOptions = { ...opts };
@@ -488,7 +490,11 @@ export class Agent {
         });
         planGate.endRound();
         if (held.size) { ui.info('Plan first: the agent was asked to write a task list before changing files.'); }
-        const exec = (tc: ToolCall) => (held.has(tc.id) ? Promise.resolve(this.holdForPlan(tc, ui)) : this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn));
+        // A call the loop guard already escalated is refused instead of run again (loopGuard.ts).
+        const refused = new Set(res.toolCalls.filter((tc) => !held.has(tc.id) && loop.blocks(tc.function.name, tc.function.arguments)).map((tc) => tc.id));
+        const exec = (tc: ToolCall) => (held.has(tc.id) ? Promise.resolve(this.holdForPlan(tc, ui))
+          : refused.has(tc.id) ? Promise.resolve(loop.block(tc.function.name))
+            : this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn));
         for (const batch of planBatches(res.toolCalls, (tc) => this.parallelSafe(tc, run.mode), MAX_PARALLEL_TOOLS)) {
           // Changes from before this batch (the user typing, a background agent) are not this batch's doing.
           if (feed) { cursor = feed.cursor(); }
@@ -498,8 +504,8 @@ export class Agent {
           const external = [...(seen?.paths ?? []), ...this.takePending()];
           if (external.length) { dirty = true; this.noteChanged(external); }
           batch.forEach((tc, j) => {
-            // A held call did not run: it is neither a failure or repeat for the loop guard nor a change.
-            if (held.has(tc.id)) { this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] }); return; }
+            // A held or refused call did not run: it is neither a failure or repeat for the loop guard nor a change.
+            if (held.has(tc.id) || refused.has(tc.id)) { this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] }); return; }
             const loopNudge = loop.observe(tc.function.name, tc.function.arguments, results[j], this.toolFor(tc.function.name)?.kind);
             this.history.push({ role: 'tool', tool_call_id: tc.id, content: withNudge(results[j], loopNudge, (t) => ui.info(t)) });
             // A command that changed files (a formatter, a code generator) is a change, not a check.
@@ -512,6 +518,12 @@ export class Agent {
         if (nudge) {
           const last = this.history[this.history.length - 1];
           if (last?.role === 'tool') { last.content = `${last.content ?? ''}\n\n${nudge}`; }
+        }
+        if (refused.size) { ui.info('The agent tried the same call again after being told to stop; it was not run.'); }
+        if (loop.stuck) {
+          ui.info('Stopped: the agent kept repeating the same call even after it was blocked. Tell it what to look at next, then send your message to continue.');
+          this.reportVerification(ui);
+          return;
         }
       }
       // Hitting the round limit also ends the turn: settle open steps on the next turn, as a normal ending would.
@@ -683,7 +695,7 @@ export class Agent {
   private injectQueued(ui: AgentUi): void {
     const items = [...this.queuedBuffer.splice(0), ...(this.pendingInput?.() ?? [])];
     if (!items.length) { return; }
-    this.history.push({ role: 'user', content: queuedMessageText(items.map((q) => q.text)), display: items.map((q) => q.display).join('\n\n') });
+    this.history.push({ role: 'user', content: queuedMessageText(items.map((q) => q.text)), display: items.map((q) => q.display).join('\n\n'), at: Date.now() });
     ui.userInjected?.(items);
   }
 

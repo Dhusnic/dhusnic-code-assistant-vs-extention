@@ -199,7 +199,8 @@ test('agent: bad JSON args and unknown tools are reported, not thrown', async ()
 
 test('agent: iteration cap stops runaway loops', async () => {
   const root = await tmpDir();
-  const llm = fakeLlm([call('list_dir', { path: '.' })]);
+  let n = 0;   // distinct (equivalent) paths: identical calls would be blocked by the loop guard before the cap
+  const llm = fakeLlm([() => call('list_dir', { path: `.${'/.'.repeat(n++)}` })]);
   const ui = recordingUi();
   await makeAgent(root, llm).send('loop', { ...OPTS, effort: 'low' }, ui);
   assert.equal(llm.calls.length, effortParams('low').maxIterations);

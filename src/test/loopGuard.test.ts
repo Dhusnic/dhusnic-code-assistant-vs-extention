@@ -155,3 +155,30 @@ test('Agent: a command failing the same way twice is nudged (fake run_command)',
   assert.match(String(last.content), /<system-reminder>The command `node app\.js` keeps failing/);
   assert.ok(ui.events.some((e) => /^info:The command `node app\.js` keeps failing/.test(e)));
 });
+
+test('after the escalation an identical call is blocked, and two blocked calls mark the turn stuck', () => {
+  const g = new LoopGuard();
+  const args = J({ command: 'git log --oneline -1000' });
+  for (let i = 0; i < 5; i++) { assert.equal(g.blocks('run_command', args), false); g.observe('run_command', args, 'abc\n[exit 0]'); }
+  assert.equal(g.blocks('run_command', args), true, 'escalated at 5: the next identical call is refused');
+  assert.equal(g.blocks('run_command', J({ command: 'git log -5' })), false, 'other arguments still run');
+  assert.match(g.block('run_command'), /^BLOCKED: not run/);
+  assert.equal(g.stuck, false);
+  g.block('run_command');
+  assert.equal(g.stuck, true);
+});
+
+test('Agent: a call repeated after the escalation is not run, and the turn stops once it keeps going', async () => {
+  const root = await tmpDir('loop-');
+  let runs = 0;
+  const runCommand = { kind: 'read' as const, spec: fnSpec('run_command', '', {}, []), describe: (a: any) => `Run: ${a.command}`, run: async () => { runs++; return 'abc123 fix\n[exit 0]'; } };
+  const same = (id: string) => call('run_command', { command: 'git log --oneline -1000' }, id);
+  const llm = fakeLlm([...Array.from({ length: 10 }, (_, i) => same(`c${i}`)), text('never reached')]);
+  const agent = new Agent({ root, llm: llm.fn, getConfig: () => ({ baseUrl: '', apiKey: '', model: 'm', temperature: 0, allowSelfSigned: true }), tools: () => [runCommand] });
+  const ui = recordingUi();
+  await agent.send('investigate', OPTS, ui);
+  assert.equal(runs, 5, 'runs until the escalation, then is refused');
+  assert.equal(llm.calls.length, 7, 'two refused calls, then the turn ends');
+  assert.equal(agent.history.filter((m) => m.role === 'tool' && /^BLOCKED: not run/.test(String(m.content))).length, 2);
+  assert.ok(ui.events.some((e) => /^info:Stopped: the agent kept repeating/.test(e)));
+});

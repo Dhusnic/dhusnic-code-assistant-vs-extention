@@ -20,7 +20,8 @@ async function build(script: Parameters<typeof fakeLlm>[0], subagent = false) {
 const reminders = (msgs: any[]) => msgs.filter((m) => m.role === 'tool' && /<system-reminder>.*task list/s.test(String(m.content)));
 
 test('a task list left untouched for many tool rounds gets a reminder with its current state (the "stuck on step 1" bug)', async () => {
-  const work = Array.from({ length: TODO_REMINDER_ROUNDS * 2 }, (_, i) => call('list_dir', { path: '.' }, `L${i}`));
+  // Distinct (equivalent) paths: identical calls would be blocked by the loop guard.
+  const work = Array.from({ length: TODO_REMINDER_ROUNDS * 2 }, (_, i) => call('list_dir', { path: `.${'/.'.repeat(i)}` }, `L${i}`));
   const { agent } = await build([call('todo_write', LIST('in_progress'), 'T1'), ...work, call('todo_write', LIST('completed', 'completed'), 'T2'), text('done')]);
   await agent.send('build it', OPTS, recordingUi());
   const r = reminders(agent.history);

@@ -11,6 +11,11 @@
  *   command  run_command failing twice with the same output, or COMMAND_FAIL_LIMIT times in all.
  *   rounds   FAIL_ROUND_LIMIT tool rounds in a row in which every call failed (reported by endRound()).
  * A call is reported under one pattern at most (edit and command failures are not also counted as repeats).
+ *
+ * Some models (Qwen3-Coder among them) ignore both nudges and keep copying their previous step: each copy in the
+ * history makes the next one likelier. So after the escalation an identical call is not run at all (blocks() / block():
+ * the model gets a BLOCKED result instead), and after BLOCKED_LIMIT such blocked calls `stuck` is set and the agent
+ * ends the turn rather than burn the rest of its rounds and context.
  * Pure: no I/O, no editor access. A new guard is created per turn, which is the per-turn reset.
  */
 import { exitCodeOf } from './checks';
@@ -25,6 +30,8 @@ export const COMMAND_FAIL_LIMIT = 3;
 export const FAIL_ROUND_LIMIT = 4;
 /** Further occurrences after a nudge before the one stronger escalation. */
 export const ESCALATE_AFTER = 2;
+/** Identical calls refused (after the escalation) before the turn is stopped. */
+export const BLOCKED_LIMIT = 2;
 
 const EDIT_TOOLS = new Set(['edit_file', 'multi_edit']);
 
@@ -66,6 +73,23 @@ export class LoopGuard {
   private failRounds: Counter = { count: 0, fired: 0, at: 0 };
   private roundCalls = 0;
   private roundFailures = 0;
+  private blocked = 0;
+
+  /** True once the model kept repeating a call after it was escalated and then blocked: the turn should end. */
+  get stuck(): boolean { return this.blocked >= BLOCKED_LIMIT; }
+
+  /** Whether this call repeats one the model was already told to stop (it is then not run; see block()). */
+  blocks(name: string, rawArgs: string): boolean {
+    return this.repeats.get(`${name}\u0000${canonicalArgs(rawArgs)}`)?.fired === 2;
+  }
+
+  /** Records a refused repeat and returns the result the model sees instead of running the call. */
+  block(name: string): string {
+    this.blocked++;
+    this.roundCalls++;
+    this.roundFailures++;
+    return `BLOCKED: not run. You already called ${name} with exactly these arguments several times this turn and were told to stop; the result would be the same as before. Use the result you already have, take a different action, or end your turn and tell the user what is blocking you.`;
+  }
 
   /**
    * Records one finished tool call. `kind` is the tool's kind when known ('edit' successes clear the repeat counts).

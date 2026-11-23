@@ -21,6 +21,8 @@ export interface ChatMessage {
   tool_call_id?: string;
   /** UI-only text (e.g. the user's message before @mention expansion). Never sent to the LLM. */
   display?: string;
+  /** UI-only: when the user sent this message (epoch ms). Set on messages the user typed, not on automatic ones. */
+  at?: number;
 }
 export interface ToolSpec { type: 'function'; function: { name: string; description: string; parameters: object } }
 
@@ -88,8 +90,8 @@ export function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen
   };
 }
 
-export const stripUiFields = (messages: ChatMessage[]): Omit<ChatMessage, 'display'>[] =>
-  messages.map(({ display: _display, ...m }) => m);
+export const stripUiFields = (messages: ChatMessage[]): Omit<ChatMessage, 'display' | 'at'>[] =>
+  messages.map(({ display: _display, at: _at, ...m }) => m);
 
 export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => {
   const url = endpoint(cfg, '/chat/completions');

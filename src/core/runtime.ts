@@ -387,7 +387,7 @@ export class SessionManager {
     rt.cancelled = false;
     // Marked busy synchronously so a second send in the same tick (e.g. a double click) is refused.
     this.setStatus(rt, 'queued', 'Starting…');
-    this.emit(rt, { type: 'userMsg', text: display, turn, files: opts.files ?? [], ...(opts.thumbs?.length ? { thumbs: opts.thumbs } : {}), ...(opts.notification ? { notification: opts.notification } : {}) });
+    this.emit(rt, { type: 'userMsg', text: display, turn, at: Date.now(), files: opts.files ?? [], ...(opts.thumbs?.length ? { thumbs: opts.thumbs } : {}), ...(opts.notification ? { notification: opts.notification } : {}) });
     rt.run = this.runTurn(rt, prompt, display, turn, !opts.noQueue);
     return rt.run;
   }
@@ -753,7 +753,7 @@ export class SessionManager {
       },
       info: (t) => this.emit(rt, { type: 'info', text: t }),
       userInjected: (items) => {
-        this.emit(rt, { type: 'userMsg', text: items.map((q) => q.display).join('\n\n'), midTurn: true, files: items.flatMap((q) => q.files ?? []), thumbs: items.flatMap((q) => q.thumbs ?? []) });
+        this.emit(rt, { type: 'userMsg', text: items.map((q) => q.display).join('\n\n'), midTurn: true, at: Date.now(), files: items.flatMap((q) => q.files ?? []), thumbs: items.flatMap((q) => q.thumbs ?? []) });
         this.emitQueue(rt);
         this.setStatus(rt, rt.status, 'Reading your new message…');
       },
@@ -925,10 +925,12 @@ function truncateLog(rt: AgentRuntime, turn: number): void {
 export function transcriptFromHistory(agent: Agent, describe?: (name: string, args: any) => string): UiEvent[] {
   const events: UiEvent[] = [];
   for (const it of historyToUi(agent.history, agent.turnStarts, describe)) {
-    if (it.type === 'user') { events.push({ type: 'userMsg', text: it.text, turn: it.turn, files: [] }); }
+    if (it.type === 'user') {
+      events.push(it.mid ? { type: 'userMsg', text: it.text, midTurn: true, files: [], at: it.at } : { type: 'userMsg', text: it.text, turn: it.turn, files: [], ...(it.at ? { at: it.at } : {}) });
+    } else if (it.type === 'note') { events.push({ type: 'info', text: it.text }); }
     else if (it.type === 'assistant') { events.push({ type: 'assistantText', text: it.text }); }
     else {
-      events.push({ type: 'toolStart', id: it.id, name: it.name, detail: it.detail, args: it.args });
+      events.push({ type: 'toolStart', id: it.id, name: it.name, kind: agent.toolKind(it.name), detail: it.detail, args: it.args });
       events.push({ type: 'toolEnd', id: it.id, ok: it.ok, result: it.result });
     }
   }
