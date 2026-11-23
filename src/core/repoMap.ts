@@ -17,6 +17,14 @@
  *   build finishes in the background for the next turn. The rendered text only changes when files change, so it does
  *   not defeat the server's prompt prefix cache; for the same reason the prompt is not tuned to each user message.
  * - Budgets are in tokens at 3.5 characters per token, the estimate compaction.ts uses.
+ * - Optional language-server refinement: the host may inject a SymbolProvider (document symbols, vscode-free shape
+ *   LsSymbol) per root. It replaces the regex definitions only for languages where the regexes are weak (LS_LANGS:
+ *   Java, Kotlin, C#, Go, PHP) and only for the files a render() actually showed (at most LS_MAX_FILES per pass), since
+ *   each call opens a document and may wake a language server. render() never waits for it: it schedules one
+ *   background pass at a time, with a per-call and a per-pass time box. Results live on the file's entry, so they are
+ *   kept until the file's size or mtime changes. A throw, timeout or empty answer keeps the regex definitions; a file is
+ *   tried LS_MAX_TRIES times and a language that only fails is paused for a while. The rendered text changes once when
+ *   refined definitions arrive and is stable afterwards (no calls are repeated for unchanged files).
  */
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -34,6 +42,13 @@ const TOOL_TOKENS = 5000;
 const PROMPT_SYMBOLS = 8;
 const TOOL_SYMBOLS = 25;
 const DEFAULT_TIMEOUT_MS = 1500;
+/** Language-server refinement limits (see the design comment). */
+const LS_MAX_FILES = 60;
+const LS_CONCURRENCY = 4;
+const LS_CALL_MS = 3000;
+const LS_PASS_MS = 20_000;
+const LS_MAX_TRIES = 3;
+const LS_PAUSE_MS = 5 * 60_000;
 
 type Lang = 'ts' | 'py' | 'go' | 'java' | 'kt' | 'cs' | 'rs' | 'php' | 'rb';
 const LANG_BY_EXT: Record<string, Lang> = {
@@ -41,6 +56,8 @@ const LANG_BY_EXT: Record<string, Lang> = {
   py: 'py', go: 'go', java: 'java', kt: 'kt', kts: 'kt', cs: 'cs', rs: 'rs', php: 'php', rb: 'rb',
 };
 export const langOf = (file: string): Lang | undefined => LANG_BY_EXT[file.slice(file.lastIndexOf('.') + 1).toLowerCase()];
+/** Languages whose regex definitions are refined with the language server when one is available. */
+const LS_LANGS: ReadonlySet<Lang> = new Set<Lang>(['java', 'kt', 'cs', 'go', 'php']);
 
 export type DefKind = 'class' | 'type' | 'function' | 'method' | 'const';
 /** `local`: not visible outside the file (unexported in TS/JS, lower-case in Go, _name in Python); ranked lower. */
@@ -152,12 +169,91 @@ function braceDelta(line: string): number {
   return d;
 }
 
+/**
+ * A document symbol as a language server reports it, without vscode types: `kind` is the SymbolKind name ("Class",
+ * "Method", ...) and `line` the source line holding the symbol's name (used for visibility keywords).
+ */
+export interface LsSymbol { name: string; kind: string; line?: string; children?: LsSymbol[] }
+/** Document symbols of one file (absolute path), or undefined/empty when no language server answers. */
+export type SymbolProvider = (absPath: string, signal: AbortSignal) => Promise<LsSymbol[] | undefined>;
+
+const LS_CONTAINERS = new Set(['File', 'Module', 'Namespace', 'Package']);
+const LS_TYPES = new Set(['Class', 'Struct', 'Interface', 'Enum', 'Object']);
+const LS_FUNCS = new Set(['Function', 'Method', 'Constructor']);
+const escapeRe = (s: string): string => s.replace(/[$]/g, '\\$');
+
+/**
+ * Map definitions from document symbols, keeping what extractSymbols would keep: types (top-level and nested, not
+ * private), top-level functions, and the visible methods of types (public in Java/C# unless in an interface, not
+ * private/protected in Kotlin/PHP). Fields, properties, variables and local functions are left out.
+ */
+export function defsFromSymbols(file: string, symbols: LsSymbol[]): Def[] {
+  const lang = langOf(file);
+  if (!lang) { return []; }
+  const defs: Def[] = [];
+  const seen = new Set<string>();
+  const add = (kind: DefKind, name: string, l: string): void => {
+    if (name.length < 2 || seen.has(l)) { return; }
+    seen.add(l);
+    const local = lang === 'go' ? /^[a-z_]/.test(name) : lang === 'py' && name.startsWith('_');
+    defs.push({ name, kind, label: l, ...(local ? { local: true as const } : {}) });
+  };
+  const visit = (list: LsSymbol[], owner: LsSymbol | undefined, depth: number): void => {
+    if (depth > 6) { return; }
+    for (const s of list) {
+      if (typeof s?.name !== 'string') { continue; }
+      if (LS_CONTAINERS.has(s.kind)) { if (!owner) { visit(s.children ?? [], undefined, depth + 1); } continue; }
+      // gopls names methods "(*Server).Start"; other servers may add a signature ("find(long)") or generics.
+      const recv = lang === 'go' ? /^\(\*?\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\)\.([A-Za-z_]\w*)$/.exec(s.name) : null;
+      const name = recv ? recv[2] : s.name.trim().replace(/[\s<([:].*$/, '');
+      if (!/^[A-Za-z_$][\w$]*$/.test(name)) { continue; }
+      const line = s.line ?? '';
+      const at = line.search(new RegExp(`(^|[^\\w$])${escapeRe(name)}([^\\w$]|$)`));
+      const pre = at < 0 ? line : line.slice(0, at + 1);
+      const hidden = lang === 'kt' || lang === 'php' ? /\b(private|protected)\b/.test(pre) : /\bprivate\b/.test(pre);
+      if (LS_TYPES.has(s.kind)) {
+        if (hidden && lang !== 'go') { continue; }
+        const kw = new RegExp(`\\b(class|interface|enum|record|object|struct|trait|type)\\s+${escapeRe(name)}\\b`).exec(line)?.[1]
+          ?? (lang === 'go' ? 'type' : s.kind.toLowerCase());
+        const kind: DefKind = lang === 'go'
+          ? (s.kind === 'Struct' || s.kind === 'Interface' ? 'class' : 'type')
+          : (kw === 'interface' || kw === 'trait' || kw === 'type' ? 'type' : 'class');
+        add(kind, name, `${kw} ${name}`);
+        visit(s.children ?? [], s, depth + 1);
+      } else if (LS_FUNCS.has(s.kind)) {
+        if (s.kind === 'Constructor' && name !== '__construct' && name !== '__init__') { continue; }
+        if (lang !== 'go' && hidden) { continue; }
+        if (owner || recv || s.kind === 'Method') {
+          // Java and C# members are only shown when public (interface members are public implicitly).
+          if ((lang === 'java' || lang === 'cs') && owner && owner.kind !== 'Interface' && line && !/\bpublic\b/.test(pre)) { continue; }
+          if (lang === 'php' && name.startsWith('__') && name !== '__construct') { continue; }
+          add('method', name, label('method', name, recv?.[1]));
+        } else {
+          add('function', name, label('function', name));
+        }
+      }
+    }
+  };
+  visit(symbols, undefined, 0);
+  return defs;
+}
+
 /** Identifiers of a file (3+ characters), unique. */
 function identifiers(text: string): string[] {
   return [...new Set(text.match(/[A-Za-z_$][\w$]{2,}/g) ?? [])];
 }
 
-interface FileEntry { mtimeMs: number; size: number; defs: Def[]; ids: string }
+/** `ls`: the language server answered for this version of the file; `lsFails`: unanswered attempts so far. */
+interface FileEntry { mtimeMs: number; size: number; defs: Def[]; ids: string; ls?: true; lsFails?: number }
+
+export interface RepoMapOptions {
+  /** Language-server symbols for this root; called per pass, so a setting can turn it off (undefined = off). */
+  symbols?: () => SymbolProvider | undefined;
+  /** Time box of one provider call (default 3000 ms). */
+  lsCallMs?: number;
+  /** Time box of one refinement pass (default 20 s). */
+  lsPassMs?: number;
+}
 interface Ranked { file: string; score: number; defs: Array<Def & { refs: number }> }
 
 export interface RenderOptions {
@@ -198,7 +294,77 @@ export class RepoMap {
   /** Duration of the last refresh in ms. */
   lastBuildMs = 0;
 
-  constructor(readonly root: string, private fileIndex: FileIndex = new FileIndex(root)) {}
+  private refining?: Promise<void>;
+  /** Languages whose server only failed recently, with the time they may be tried again. */
+  private lsPaused = new Map<Lang, number>();
+  /** Provider calls made (for diagnostics and tests). */
+  lsCalls = 0;
+
+  constructor(readonly root: string, private fileIndex: FileIndex = new FileIndex(root), private opts: RepoMapOptions = {}) {}
+
+  /** The running language-server refinement pass, if any (resolves when it ends; never rejects). */
+  refinement(): Promise<void> { return this.refining ?? Promise.resolve(); }
+
+  /** Starts a background refinement of these files (those a render showed) unless one is running or none qualifies. */
+  private scheduleRefine(files: string[]): void {
+    if (this.refining || !files.length) { return; }
+    let provider: SymbolProvider | undefined;
+    try { provider = this.opts.symbols?.(); } catch { provider = undefined; }
+    if (!provider) { return; }
+    const now = Date.now();
+    const todo = files.filter((f) => {
+      const lang = langOf(f);
+      const e = this.files.get(f);
+      return !!lang && LS_LANGS.has(lang) && !!e && !e.ls && (e.lsFails ?? 0) < LS_MAX_TRIES && e.size <= MAX_FILE_BYTES
+        && (this.lsPaused.get(lang) ?? 0) <= now;
+    }).slice(0, LS_MAX_FILES);
+    if (!todo.length) { return; }
+    this.refining = this.refine(todo, provider).catch(() => undefined).finally(() => { this.refining = undefined; });
+  }
+
+  private async refine(todo: string[], provider: SymbolProvider): Promise<void> {
+    const ac = new AbortController();
+    const passTimer = setTimeout(() => ac.abort(), this.opts.lsPassMs ?? LS_PASS_MS);
+    passTimer.unref?.();
+    const stats = new Map<Lang, { ok: number; fail: number }>();
+    try {
+      await mapLimit(todo, LS_CONCURRENCY, async (rel) => {
+        const lang = langOf(rel)!;
+        const entry = this.files.get(rel);
+        if (!entry || entry.ls || (this.lsPaused.get(lang) ?? 0) > Date.now()) { return; }
+        let syms: LsSymbol[] | undefined;
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          this.lsCalls++;
+          const timeout = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), this.opts.lsCallMs ?? LS_CALL_MS); timer.unref?.(); });
+          syms = await Promise.race([provider(path.join(this.root, rel), ac.signal), timeout]);
+        } catch {
+          syms = undefined;
+        } finally {
+          clearTimeout(timer);
+        }
+        const st = stats.get(lang) ?? { ok: 0, fail: 0 };
+        stats.set(lang, st);
+        if (!Array.isArray(syms) || !syms.length) {
+          entry.lsFails = (entry.lsFails ?? 0) + 1;
+          // No server for this language (or it is not ready): stop asking for a while instead of opening every file.
+          if (++st.fail >= 3 && !st.ok) { this.lsPaused.set(lang, Date.now() + LS_PAUSE_MS); }
+          return;
+        }
+        st.ok++;
+        if (this.files.get(rel) !== entry) { return; } // re-read meanwhile: the answer may be for older text
+        entry.ls = true;
+        let defs: Def[] = [];
+        try { defs = JSON.parse(JSON.stringify(defsFromSymbols(rel, syms))); } catch { defs = []; }
+        if (defs.length && defs.map((d) => d.label).join('\n') !== entry.defs.map((d) => d.label).join('\n')) {
+          entry.defs = defs;
+          this.ranked = undefined;
+        }
+      }, ac.signal);
+    } finally {
+      clearTimeout(passTimer);
+    }
+  }
 
   /** Brings the map up to date: new and changed source files are (re)parsed, deleted ones dropped. */
   refresh(signal?: AbortSignal): Promise<void> {
@@ -314,6 +480,8 @@ export class RepoMap {
     if (lines.length) { parts.push(o.forPrompt ? 'Key files (most used first):' : 'Files (most used first):', ...lines); }
     if (shown < ranked.length) { parts.push(note(ranked.length - shown)); }
     if (this.truncated) { parts.push(`(only the first ${MAX_FILES} source files are mapped)`); }
+    // Only what was shown is worth a language-server call; the refined text is used from the next render on.
+    this.scheduleRefine(ranked.slice(0, lines.length).map((r) => r.file));
     return parts.join('\n');
   }
 
@@ -362,11 +530,17 @@ export class RepoMap {
 export class RepoMaps {
   private maps = new Map<string, RepoMap>();
 
-  constructor(private indexFor: (root: string) => FileIndex = (root) => new FileIndex(root)) {}
+  /** `symbolsFor`: the language-server symbol provider for a root (undefined: regex only), asked on every pass. */
+  constructor(private indexFor: (root: string) => FileIndex = (root) => new FileIndex(root),
+    private opts: { symbolsFor?: (root: string) => SymbolProvider | undefined } = {}) {}
 
   get(root: string): RepoMap {
     let m = this.maps.get(root);
-    if (!m) { m = new RepoMap(root, this.indexFor(root)); this.maps.set(root, m); }
+    if (!m) {
+      const symbolsFor = this.opts.symbolsFor;
+      m = new RepoMap(root, this.indexFor(root), symbolsFor ? { symbols: () => symbolsFor(root) } : {});
+      this.maps.set(root, m);
+    }
     return m;
   }
 
