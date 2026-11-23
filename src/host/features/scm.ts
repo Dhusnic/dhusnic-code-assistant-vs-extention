@@ -42,7 +42,7 @@ export async function generateCommitMessage(hub: Hub, arg?: unknown): Promise<vo
     if (!snap.diff.trim()) { void vscode.window.showInformationMessage('Infraon: there is nothing to commit.'); return; }
     const [branch, recent] = await Promise.all([currentBranch(cwd), recentSubjects(cwd)]);
     const cfg = await hub.llmConfig(hub.routeModel('commit', hub.defaults().model));
-    const res = await hub.llmFor(SID)({ ...cfg, maxTokens: 400 }, buildCommitMessages(snap.diff, recent, branch), [], () => undefined, new AbortController().signal);
+    const res = await hub.llmFor(SID)({ ...cfg, temperature: 0.1, maxTokens: 400 }, buildCommitMessages(snap.diff, recent, branch), [], () => undefined, new AbortController().signal);
     const message = hub.safety.vault(SID).restore(cleanCommitMessage(res.content));
     if (!message) { void vscode.window.showWarningMessage('Infraon: the model returned no commit message. Try again.'); return; }
     repo.inputBox.value = message;

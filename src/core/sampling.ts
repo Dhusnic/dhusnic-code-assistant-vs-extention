@@ -15,6 +15,10 @@
  * llama.cpp, SGLang and LiteLLM accept them; withSamplingFallback() retries a request once without them when the
  * gateway rejects them, and stops sending them to that gateway and model from then on.
  *
+ * The profile applies to the agent conversation and sub-agents. Utility calls whose output should be repeatable
+ * (compaction and handoff summaries, commit messages, web-page and image summaries) still set their own low
+ * temperature on top of it; inline completions keep theirs too.
+ *
  * No vscode import: the host reads the settings and passes them in.
  */
 import type { LlmFn } from './llm';

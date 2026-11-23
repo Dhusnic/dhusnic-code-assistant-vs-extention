@@ -125,7 +125,7 @@ async function draftCommit(hub: Hub, panel: FeaturePanel): Promise<void> {
   const branch = await currentBranch(hub.root);
   const selected = hub.manager.session(panel.sid).main().settings.model;
   const cfg = await hub.llmConfig(hub.routeModel('commit', selected));
-  const res = await hub.llmFor(panel.sid)({ ...cfg, maxTokens: 400 }, buildCommitMessages(snap.diff, await recentSubjects(hub.root), branch), [], () => undefined, new AbortController().signal);
+  const res = await hub.llmFor(panel.sid)({ ...cfg, temperature: 0.1, maxTokens: 400 }, buildCommitMessages(snap.diff, await recentSubjects(hub.root), branch), [], () => undefined, new AbortController().signal);
   panel.post({ type: 'commitDraft', message: hub.safety.vault(panel.sid).restore(cleanCommitMessage(res.content)), branch, source: snap.source, truncated: snap.truncated });
 }
 

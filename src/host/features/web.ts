@@ -151,7 +151,7 @@ export class WebService implements vscode.Disposable {
 
   private async summarize(sid: string, system: string, user: string, signal: AbortSignal): Promise<string> {
     const model = this.host.routeModel('summary', this.host.defaultModel());
-    const cfg = { ...(await this.host.llmConfig(model, false)), maxTokens: 2048 };
+    const cfg = { ...(await this.host.llmConfig(model, false)), temperature: 0, maxTokens: 2048 };
     const r = await this.host.llmFor(sid)(cfg, [{ role: 'system', content: system }, { role: 'user', content: user }], [], () => undefined, signal);
     return r.content;
   }
@@ -164,7 +164,7 @@ export class WebService implements vscode.Disposable {
   async describeImage(dataUrl: string, question: string, signal: AbortSignal): Promise<string> {
     const model = this.visionModel();
     if (!model) { return ''; }
-    const cfg = { ...(await this.host.llmConfig(model, false)), maxTokens: 1500 };
+    const cfg = { ...(await this.host.llmConfig(model, false)), temperature: 0, maxTokens: 1500 };
     // OpenAI-style multimodal content: the image goes to the company gateway only, never to a third party.
     const content = [{ type: 'text', text: question }, { type: 'image_url', image_url: { url: dataUrl } }] as unknown as string;
     const r = await streamChat(cfg, [{ role: 'user', content }], [], () => undefined, signal);
