@@ -798,7 +798,7 @@ export class Agent {
       } catch { /* the tool reports the bad path */ }
     }
     const ctx = {
-      root: this.deps.root, roots, signal, reads: this.reads,
+      root: this.deps.root, roots, signal, reads: this.reads, diagnostics: this.deps.diagnostics,
       snapshot: (abs: string) => this.deps.snapshot?.(turn, abs) ?? Promise.resolve(),
     };
     const allowed = isAllowed(opts.mode, tool.kind);

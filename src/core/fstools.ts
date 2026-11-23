@@ -7,6 +7,7 @@ import { withFileLock } from './locks';
 import { SKIP_DIRS, filterFiles, globToRegex, hasGlobChars, matchesGlob } from './glob';
 import { EnginePreference, FileIndex, SearchMode, SearchOptions, formatSearch, search } from './search';
 import { CodeIndex, formatCodeHits } from './codeSearch';
+import { reportNewErrors, takeBaseline } from './editDiagnostics';
 
 export { SKIP_DIRS, globToRegex, matchesGlob };
 
@@ -354,6 +355,7 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
       },
       async run(a, ctx) {
         const abs = resolveIn(ctx, a.path);
+        const base = takeBaseline(ctx.diagnostics, abs, !existsSync(abs));
         await withFileLock(abs, async () => {
           await ensureFresh(ctx, abs, a.path);
           await ctx.snapshot(abs);
@@ -365,7 +367,7 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
           await ctx.reads?.markWritten(abs);
         });
         indexFor(rootOf(ctx, abs)?.path ?? ctx.root).invalidate();
-        return `Wrote ${a.path}`;
+        return `Wrote ${a.path}${await reportNewErrors(ctx.diagnostics, abs, a.path, base, ctx.signal)}`;
       },
     },
     {
@@ -378,13 +380,15 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
       async preview(a, ctx) { const e = await computeEdit(a, ctx); return { path: a.path, oldText: e.oldText, newText: e.newText }; },
       async run(a, ctx) {
         // Re-read inside the lock: another agent may have changed the file since the preview.
-        await withFileLock(resolveIn(ctx, a.path), async () => {
+        const abs = resolveIn(ctx, a.path);
+        const base = takeBaseline(ctx.diagnostics, abs);
+        await withFileLock(abs, async () => {
           const e = await computeEdit(a, ctx);
           await ctx.snapshot(e.abs);
           await fs.writeFile(e.abs, e.newText, 'utf8');
           await ctx.reads?.markWritten(e.abs);
         });
-        return `Edited ${a.path}`;
+        return `Edited ${a.path}${await reportNewErrors(ctx.diagnostics, abs, a.path, base, ctx.signal)}`;
       },
     },
     {
@@ -406,13 +410,15 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
       async preview(a, ctx) { const e = await computeEdits(a.path, multiOps(a), ctx); return { path: a.path, oldText: e.oldText, newText: e.newText }; },
       async run(a, ctx) {
         const ops = multiOps(a);
-        await withFileLock(resolveIn(ctx, a.path), async () => {
+        const abs = resolveIn(ctx, a.path);
+        const base = takeBaseline(ctx.diagnostics, abs);
+        await withFileLock(abs, async () => {
           const e = await computeEdits(a.path, ops, ctx);
           await ctx.snapshot(e.abs);
           await fs.writeFile(e.abs, e.newText, 'utf8');
           await ctx.reads?.markWritten(e.abs);
         });
-        return `Edited ${a.path} (${ops.length} changes)`;
+        return `Edited ${a.path} (${ops.length} changes)${await reportNewErrors(ctx.diagnostics, abs, a.path, base, ctx.signal)}`;
       },
     },
     {

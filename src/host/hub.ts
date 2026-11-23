@@ -26,6 +26,7 @@ import { DiffContentProvider } from './diffProvider';
 import { SessionPanel } from './sessionPanel';
 import { createVsCodeTools } from './vscodeTools';
 import { createNavTools } from './navTools';
+import { createEditDiagnostics } from './editDiagnostics';
 import { ChangeJournal, isArtifactPath } from '../core/changeJournal';
 import { fetchContextWindow } from '../core/modelInfo';
 import { IgnoreMatcher, createIgnore } from '../core/glob';
@@ -54,6 +55,7 @@ export class Hub {
   private fsOptions: FsToolsOptions;
   private fsTools: ReturnType<typeof createFsTools>;
   private mcp: McpManager;
+  private readonly editDiagnostics = createEditDiagnostics(() => this.cfg.get<boolean>('diagnosticsAfterEdit', true));
   private mcpLoaded = false;
   private mcpErrors: string[] = [];
   private panels = new Map<string, SessionPanel>();
@@ -435,6 +437,7 @@ export class Hub {
       // An agent in its own worktree works outside the workspace: workspace changes and folders are not its own.
       fileChanges: root === this.root ? this.journal : undefined,
       roots: root === this.root ? () => this.workspaceRoots() : undefined,
+      diagnostics: this.editDiagnostics,
       limits: () => ({ maxIterations: this.cfg.get<number>('maxIterations', 1200), maxTokens: this.cfg.get<number>('maxOutputTokens', 0) }),
       snapshot: (turn, abs) => checkpoints.snapshot(turn, abs),
       restore: (turn) => checkpoints.restore(turn),
