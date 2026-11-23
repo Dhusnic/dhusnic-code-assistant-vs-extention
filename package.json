@@ -287,6 +287,14 @@
                         "description": "Max tool-call rounds per request (default 1200, enough to build a mid-size project in one go). 0 uses the effort level's value instead (low 15, medium 50, high 80, max 120).",
                         "order": 0
                     },
+                    "infraonAssistant.selfReview": {
+                        "type": "string",
+                        "enum": ["off", "high", "always"],
+                        "enumDescriptions": ["Never review.", "Review at High and Max effort (default).", "Review at every effort level."],
+                        "default": "high",
+                        "description": "Before finishing a request that changed files, the agent has the model review the diff against the request in a fresh conversation (one extra model call) and fixes what it finds. Runs at most once per request.",
+                        "order": 0
+                    },
                     "infraonAssistant.autoApprove": {
                         "type": "boolean",
                         "default": false,

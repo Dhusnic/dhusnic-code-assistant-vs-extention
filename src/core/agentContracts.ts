@@ -12,6 +12,7 @@ import type { Skill } from './skills';
 import type { Effort, Mode } from './policy';
 import type { FileChangeFeed } from './changeJournal';
 import type { CheckCommand } from './checks';
+import type { SelfReviewSetting } from './selfReview';
 
 export interface ApprovalRequest {
   id: string;
@@ -106,6 +107,10 @@ export interface AgentDeps {
   fileChanges?: FileChangeFeed;
   /** All workspace folders (multi-root); the first that equals root is the primary one. */
   roots?: () => WorkspaceRoot[];
+  /** infraonAssistant.selfReview: review the turn's diff with a fresh model call before finishing (selfReview.ts). Missing = off. */
+  selfReview?: () => SelfReviewSetting;
+  /** A file's content before `turn` changed it (its checkpoint backup); undefined when the turn did not capture it. */
+  original?: (turn: number, absPath: string) => Promise<{ existed: boolean; data?: Buffer } | undefined>;
 }
 
 export interface SpawnRequest {
