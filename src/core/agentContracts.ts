@@ -3,7 +3,7 @@
  * guards each tool call, the dependencies the host injects, and sub-agent spawning. Kept apart from agent.ts so the
  * host and the tests can depend on the contracts without reading the loop. agent.ts re-exports all of it.
  */
-import type { ChatMessage, LlmConfig, LlmFn } from './llm';
+import type { ChatMessage, LlmConfig, LlmFn, ToolCallProgress } from './llm';
 import type { ApprovalPreview, Tool, ToolKind, WorkspaceRoot } from './tool';
 import type { AgentType } from './agentTypes';
 import type { Answers, UserQuestion } from './questions';
@@ -12,6 +12,10 @@ import type { Skill } from './skills';
 import type { Effort, Mode } from './policy';
 import type { FileChangeFeed } from './changeJournal';
 import type { CheckCommand } from './checks';
+import type { EditDiagnostics } from './editDiagnostics';
+import type { SelfReviewSetting } from './selfReview';
+import type { EditOutcome } from './editStats';
+import type { PlanFirstSetting } from './planFirst';
 
 export interface ApprovalRequest {
   id: string;
@@ -25,6 +29,14 @@ export interface ApprovalRequest {
 
 export interface AgentUi {
   token(t: string): void;
+  /** The model is still writing a tool call (e.g. a large write_file): its name, size so far and target path. */
+  toolWriting?(p: ToolCallProgress): void;
+  /**
+   * A main-loop model call before its reply: 'waiting' when the request is sent (again after a retry), 'receiving'
+   * at the first byte of the reply, 'done' when the call has ended either way. Lets the UI tell a silent gateway
+   * from a model that is thinking.
+   */
+  modelCall?(phase: 'waiting' | 'receiving' | 'done'): void;
   toolStart(id: string, name: string, kind: ToolKind, args: string, detail: string, preview?: ApprovalPreview): void;
   toolEnd(id: string, ok: boolean, result: string): void;
   approve(req: ApprovalRequest): Promise<boolean>;
@@ -106,6 +118,18 @@ export interface AgentDeps {
   fileChanges?: FileChangeFeed;
   /** All workspace folders (multi-root); the first that equals root is the primary one. */
   roots?: () => WorkspaceRoot[];
+  /** The editor's diagnostics, so edit tools can report the errors an edit introduced (see editDiagnostics.ts). */
+  diagnostics?: EditDiagnostics;
+  /** infraonAssistant.selfReview: review the turn's diff with a fresh model call before finishing (selfReview.ts). Missing = off. */
+  selfReview?: () => SelfReviewSetting;
+  /** infraonAssistant.planFirst: hold the turn's first file change until a task list exists (planFirst.ts). Missing = off. */
+  planFirst?: () => PlanFirstSetting;
+  /** A file's content before `turn` changed it (its checkpoint backup); undefined when the turn did not capture it. */
+  original?: (turn: number, absPath: string) => Promise<{ existed: boolean; data?: Buffer } | undefined>;
+  /** Repo map section for the system prompt (repoMap.ts), fetched once per turn; '' when off or not built yet. */
+  repoMap?: () => Promise<string> | string;
+  /** Local counters of edit tool outcomes (editStats.ts): tool, model, extension and reason code only. */
+  editStats?: { record(o: EditOutcome): void };
 }
 
 export interface SpawnRequest {

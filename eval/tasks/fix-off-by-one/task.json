@@ -5,5 +5,7 @@
     "hiddenTests": "hidden",
     "mustNotChange": ["test/**"],
     "timeoutSeconds": 600,
-    "tags": ["bugfix", "failing-test"]
+    "tags": ["bugfix", "failing-test"],
+    "difficulty": "easy",
+    "language": "javascript"
 }

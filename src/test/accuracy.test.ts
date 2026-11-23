@@ -129,7 +129,8 @@ function gateSetup(steps: any[], exits: Record<string, number[]>, opts: { checks
     run: async (a) => {
       ran.push({ command: a.command, timeout: a.timeout_seconds });
       const code = exits[a.command]?.shift() ?? 0;
-      return `output of ${a.command}${code ? '\nError: something broke' : ''}\n[exit ${code}]`;
+      // Each failure differs (the run number), so a fix attempt counts as progress; checkFeedback.test.ts covers the opposite.
+      return `output of ${a.command}${code ? `\nError: something broke (run ${ran.length})` : ''}\n[exit ${code}]`;
     },
   };
   const llm = fakeLlm(steps);

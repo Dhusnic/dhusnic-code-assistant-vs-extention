@@ -1,0 +1,10 @@
+{
+    "name": "search-default-page-size",
+    "prompt": "Product decided that API list endpoints should return 25 items per page by default instead of 20 (clients that don't pass ?limit currently get 20). Make that change. Only the API default changes: the CLI's batch size and the export chunk size stay as they are, and the maximum limit stays 100.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["config", "search", "hidden-tests"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

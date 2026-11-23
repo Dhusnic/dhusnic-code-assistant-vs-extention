@@ -1,0 +1,11 @@
+{
+    "name": "question-status-code",
+    "prompt": "Question from the mobile team (no code change needed): what HTTP status code does this API return when a signed-in user tries to DELETE a comment that exists but was written by someone else? Trace it through the code. Write only the number into a new file ANSWER.txt at the project root. Do not modify any other file.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "mustNotChange": ["src/**", "test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["question", "search"],
+    "difficulty": "hard",
+    "language": "javascript"
+}

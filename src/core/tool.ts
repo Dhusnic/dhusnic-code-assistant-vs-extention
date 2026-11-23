@@ -1,4 +1,5 @@
 import { ToolSpec } from './llm';
+import type { EditDiagnostics } from './editDiagnostics';
 
 export type ToolKind = 'read' | 'edit' | 'exec' | 'meta';
 
@@ -16,6 +17,8 @@ export interface ToolCtx {
   snapshot: (absPath: string) => Promise<void>;
   /** Tracks what the agent has read; edit tools refuse to change a file it has not read, or that changed since. */
   reads?: ReadTracker;
+  /** Language-server errors for edited files; edit tools append the errors an edit introduced. Missing: no check. */
+  diagnostics?: EditDiagnostics;
 }
 
 export interface ReadTracker {

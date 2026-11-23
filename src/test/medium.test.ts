@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { Agent, CheckCommand, scopeChecks } from '../core/agent';
+import { Agent, CheckCommand, narrowCheck, relatedTestsFor, scopeChecks } from '../core/agent';
 import { createFsTools } from '../core/fstools';
 import { SUMMARY_SYSTEM } from '../core/compaction';
 import { expandMentions } from '../core/mentions';
@@ -15,42 +15,43 @@ const CFG = () => ({ baseUrl: '', apiKey: '', model: 'm', temperature: 0, allowS
 
 /* ------------------------------------------------------------------ flaw 7: checks scoped to the change */
 
-const JEST: CheckCommand = { name: 'test', command: 'npm run test', timeoutSeconds: 600, related: 'npx jest --findRelatedTests {files} --passWithNoTests' };
+const JEST: CheckCommand = { name: 'test', command: 'npm run test', timeoutSeconds: 600, related: relatedTestsFor('npm run test', 'jest') };
 const LINT: CheckCommand = { name: 'lint', command: 'npm run lint', timeoutSeconds: 300 };
-const GO: CheckCommand = { name: 'test', command: 'go test ./...', timeoutSeconds: 600, related: 'go test {dirs}' };
+const GO: CheckCommand = { name: 'test', command: 'go test ./...', timeoutSeconds: 600, related: relatedTestsFor('go test ./...') };
 
 test('scopeChecks: documentation-only changes need no checks', () => {
   assert.deepEqual(scopeChecks([LINT, JEST], ['README.md', 'docs/guide.mdx', 'img/logo.png', 'LICENSE']), []);
+  assert.deepEqual(scopeChecks([LINT, JEST], ['src/a.ts', 'README.md']), [LINT, JEST]);
 });
 
-test('scopeChecks: a few code files use the related form; checks without one stay full', () => {
-  const s = scopeChecks([LINT, JEST], ['src/a.ts', 'src/b.ts', 'README.md']);
-  assert.equal(s[0].command, 'npm run lint');
-  assert.equal(s[1].command, 'npx jest --findRelatedTests "src/a.ts" "src/b.ts" --passWithNoTests');
+test('narrowCheck: a few code files use the related form; checks without one have none', () => {
+  assert.equal(narrowCheck(JEST, ['src/a.ts', 'src/b.ts', 'README.md'])?.command, 'npx jest --findRelatedTests "src/a.ts" "src/b.ts" --passWithNoTests');
+  assert.equal(narrowCheck(LINT, ['src/a.ts']), undefined);
 });
 
-test('scopeChecks: many files, or files outside the workspace, run the full command', () => {
+test('narrowCheck: many files, or files outside the workspace, run the full command', () => {
   const many = Array.from({ length: 25 }, (_, i) => `src/f${i}.ts`);
-  assert.equal(scopeChecks([JEST], many)[0].command, 'npm run test');
-  assert.equal(scopeChecks([JEST], ['src/a.ts', 'D:/other/b.ts'])[0].command, 'npm run test');
+  assert.equal(narrowCheck(JEST, many), undefined);
+  assert.equal(narrowCheck(JEST, ['src/a.ts', 'D:/other/b.ts']), undefined);
 });
 
-test('scopeChecks: Go runs the changed packages; without .go files the full command', () => {
-  assert.equal(scopeChecks([GO], ['pkg/api/h.go', 'pkg/api/h_test.go', 'main.go'])[0].command, 'go test ./pkg/api .');
-  assert.equal(scopeChecks([GO], ['go.mod'])[0].command, 'go test ./...');
+test('narrowCheck: Go runs the changed packages; any other code file means the full command', () => {
+  assert.equal(narrowCheck(GO, ['pkg/api/h.go', 'pkg/api/h_test.go', 'main.go'])?.command, 'go test ./pkg/api .');
+  assert.equal(narrowCheck(GO, ['go.mod']), undefined);
+  assert.equal(narrowCheck(GO, ['pkg/api/h.go', 'go.mod']), undefined);
 });
 
 test('detectVerifyCommands: jest and vitest projects get a related form', async () => {
   const jest = await tmpDir();
   await fs.writeFile(path.join(jest, 'package.json'), JSON.stringify({ scripts: { test: 'jest' } }));
-  assert.equal((await detectVerifyCommands(jest)).find((c) => c.name === 'test')?.related, 'npx jest --findRelatedTests {files} --passWithNoTests');
+  assert.equal((await detectVerifyCommands(jest)).find((c) => c.name === 'test')?.related?.template, 'npx jest --findRelatedTests {files} --passWithNoTests');
   const vitest = await tmpDir();
   await fs.writeFile(path.join(vitest, 'package.json'), JSON.stringify({ scripts: { test: 'vitest' } }));
   await fs.writeFile(path.join(vitest, 'pnpm-lock.yaml'), '');
-  assert.equal((await detectVerifyCommands(vitest)).find((c) => c.name === 'test')?.related, 'pnpm exec vitest related {files} --run --passWithNoTests');
+  assert.equal((await detectVerifyCommands(vitest)).find((c) => c.name === 'test')?.related?.template, 'pnpm exec vitest related {files} --run --passWithNoTests');
   const plain = await tmpDir();
   await fs.writeFile(path.join(plain, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
-  assert.equal((await detectVerifyCommands(plain)).find((c) => c.name === 'test')?.related, undefined);
+  assert.equal((await detectVerifyCommands(plain)).find((c) => c.name === 'test')?.related, undefined, 'node --test without patterns is not narrowed');
 });
 
 function gate(steps: any[], checks: CheckCommand[]) {
@@ -69,10 +70,10 @@ test('gate: a README edit skips the checks and says so', async () => {
   assert.ok(ui.events.some((e) => /Changed 1 file \(documentation only; no checks needed\)/.test(e)));
 });
 
-test('gate: a code edit runs the related tests for that file', async () => {
+test('gate: the first check of a code edit runs the full commands', async () => {
   const { agent, ran, ui } = gate([call('edit_file', { path: 'src/a.ts' }), text('done')], [LINT, JEST]);
   await agent.send('x', AUTO, ui);
-  assert.deepEqual(ran, ['npm run lint', 'npx jest --findRelatedTests "src/a.ts" --passWithNoTests']);
+  assert.deepEqual(ran, ['npm run lint', 'npm run test']);
 });
 
 test('gate: the model running the full suite itself counts, related form or not', async () => {

@@ -1,0 +1,10 @@
+{
+    "name": "lru-cache-recency",
+    "prompt": "Our LRU cache (src/lru.js) evicts entries that were just read, so hot keys keep missing. Fix it so that get() of an existing key and set() of an existing key both count as a use, and the least recently used entry is the one evicted when the cache is full. has() must not count as a use.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

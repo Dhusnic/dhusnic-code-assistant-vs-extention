@@ -66,6 +66,15 @@ export class CheckpointStore {
 
   async entries(turn: number): Promise<CheckpointEntry[]> { return (await this.readManifest(turn)).entries; }
 
+  /** `abs` as it was before `turn` first changed it, or undefined if that turn did not capture it (self-review diffs). */
+  async originalIn(turn: number, abs: string): Promise<{ existed: boolean; data?: Buffer } | undefined> {
+    const key = fileKey(abs);
+    const e = (await this.readManifest(turn)).entries.find((x) => fileKey(x.abs) === key);
+    if (!e) { return undefined; }
+    if (!e.existed || !e.backup) { return { existed: false }; }
+    return { existed: true, data: await fs.readFile(path.join(this.turnDir(turn), e.backup)) };
+  }
+
   /** Every file captured in any turn, once each, in first-captured order. */
   async trackedFiles(): Promise<string[]> {
     const seen = new Map<string, string>();

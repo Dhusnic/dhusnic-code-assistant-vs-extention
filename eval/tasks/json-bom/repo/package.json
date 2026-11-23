@@ -1,0 +1,8 @@
+{
+    "name": "desktop-sync",
+    "version": "2.2.0",
+    "private": true,
+    "scripts": {
+        "test": "node --test"
+    }
+}

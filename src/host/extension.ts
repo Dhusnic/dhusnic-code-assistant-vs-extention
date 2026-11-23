@@ -102,11 +102,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('infraonAssistant.generateCommitMessage', async (repo?: unknown) => {
       try { await (await import('./features/scm')).generateCommitMessage(await hub(), repo); } catch (e) { void vscode.window.showErrorMessage(`Infraon: ${e instanceof Error ? e.message : String(e)}`); }
     }),
+    vscode.commands.registerCommand('infraonAssistant.showEditStats', async () => (await hub()).showEditStats()),
     vscode.commands.registerCommand('infraonAssistant.searchSessions', async () => (await workbench()).searchPicker(await hub())),
     vscode.commands.registerCommand('infraonAssistant.editMemory', async () => (await workbench()).editMemory(await hub())),
     vscode.commands.registerCommand('infraonAssistant.openPermissions', async () => (await workbench()).editPermissions(await hub())),
     vscode.commands.registerCommand('infraonAssistant.forgetHostKey', async () => (await hub()).remote.forgetHostKey()),
     vscode.commands.registerCommand('infraonAssistant.setWebApiKey', async () => (await hub()).web.setKey()),
+    vscode.commands.registerCommand('infraonAssistant.setDatabasePassword', async () => (await hub()).testing.setDatabasePassword()),
     vscode.commands.registerCommand('infraonAssistant.clearWebCache', async () => { void vscode.window.showInformationMessage(await (await hub()).web.clearCache()); }),
     vscode.commands.registerCommand('infraonAssistant.manageSchedules', async () => (await (await hub()).getScheduler()).manage()),
     vscode.commands.registerCommand('infraonAssistant.manageServers', async () => {

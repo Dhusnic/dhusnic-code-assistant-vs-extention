@@ -18,7 +18,8 @@ const task = (name: string): EvalTask => {
 const write = (root: string, rel: string, content: string) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), content); };
 const read = (root: string, rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-/* ------------------------------------------------------------------ reference solutions (never in the fixtures) */
+/* ------------------------------------------------------------------ a correct fix, as the scripted LLM writes it */
+/* (every task's own reference solution lives in eval/tasks/<task>/solution/ and is checked by evalTasks.test.ts) */
 
 const PAGINATE_FIXED = `'use strict';
 
@@ -36,28 +37,11 @@ function pageCount(total, pageSize) {
 module.exports = { paginate, pageCount };
 `;
 
-const SOLUTIONS: Record<string, (root: string) => void> = {
-  'fix-off-by-one': (root) => write(root, 'src/paginate.js', PAGINATE_FIXED),
-  'add-feature': (root) => write(root, 'src/cli.js', read(root, 'src/cli.js')
-    .replace("return shown.map((i) => `${i.name} ${i.count}`).join('\\n');",
-      "if (rest.includes('--json')) { return JSON.stringify(shown.map((i) => ({ name: i.name, count: i.count })), null, 2); }\n    return shown.map((i) => `${i.name} ${i.count}`).join('\\n');")),
-  'bug-no-test': (root) => {
-    write(root, 'src/format.js', read(root, 'src/format.js').replace(
-      'return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;',
-      "const pad = (n) => String(n).padStart(2, '0');\n  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;"));
-    write(root, 'test/format-date.test.js', "const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst { formatDate } = require('../src/format');\ntest('zero-padded month', () => assert.equal(formatDate(new Date(2024, 2, 5)), '2024-03-05'));\n");
-  },
-  'refactor-rename': (root) => {
-    for (const f of ['src/total.js', 'src/order.js', 'src/report.js', 'test/total.test.js']) { write(root, f, read(root, f).replace(/\bcalcTotal\b/g, 'calculateOrderTotal')); }
-  },
-  'crlf-edit': (root) => write(root, 'src/config.js', read(root, 'src/config.js').replace('timeoutMs: 1000,', 'timeoutMs: 5000,\r\n  verbose: false,')),
-};
-
 /* ------------------------------------------------------------------ task definitions */
 
 test('eval: all bundled tasks load without errors', () => {
   assert.deepEqual(loaded.errors, []);
-  assert.deepEqual(loaded.tasks.map((t) => t.name).sort(), Object.keys(SOLUTIONS).sort());
+  for (const name of ['add-feature', 'bug-no-test', 'crlf-edit', 'fix-off-by-one', 'refactor-rename']) { task(name); }
 });
 
 test('eval: task.json validation reports every problem', async () => {
@@ -78,22 +62,6 @@ test('eval: task.json validation reports every problem', async () => {
   assert.ok(r.errors.some((e) => /^broken: task.json is not valid JSON/.test(e)));
   assert.ok(r.errors.some((e) => /^empty: no task.json/.test(e)));
 });
-
-for (const name of Object.keys(SOLUTIONS)) {
-  test(`eval task ${name}: the check fails on the original repo and passes with a correct solution`, async () => {
-    const t = task(name);
-    const before = path.join(await tmpDir(), 'repo');
-    prepareRepo(t, before);
-    const original = await gradeRepo(t, before);
-    assert.equal(original.passed, false, `the untouched repo must fail:\n${original.output}`);
-
-    const after = path.join(await tmpDir(), 'repo');
-    prepareRepo(t, after);
-    SOLUTIONS[name](after);
-    const fixed = await gradeRepo(t, after);
-    assert.equal(fixed.passed, true, `the reference solution must pass:\n${fixed.output}`);
-  });
-}
 
 test('eval task crlf-edit: the repo starts with CRLF, and a fix that switches to LF fails', async () => {
   const t = task('crlf-edit');

@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { Agent, CheckCommand, DELEGATION_TOOLS } from '../core/agent';
+import { Agent, CheckCommand, DELEGATION_TOOLS, relatedTestsFor } from '../core/agent';
 import { detectVerifyCommands } from '../core/verify';
+import { parseSelfReviewSetting } from '../core/selfReview';
+import { parsePlanFirstSetting } from '../core/planFirst';
 import { AgentType, BUILTIN_AGENT_TYPES, loadAgentTypes, toolsForType } from '../core/agentTypes';
 import { NewSkill, Skill, addSkillFile, copySkill, createSkill, deleteSkill, findSkill, lintSkill, loadSkills, setModelInvocation, updateSkill } from '../core/skills';
 import { CheckpointStore } from '../core/checkpoints';
@@ -12,19 +14,25 @@ import { MemoryCache, loadMemoryText } from '../core/memoryFiles';
 import { ModelTask, RoutingConfig, routeModel } from '../core/modelRouting';
 import { parseTeamSources, syncTeamSkills } from '../core/teamSkills';
 import { FsToolsOptions, createFsTools } from '../core/fstools';
-import { LlmConfig, LlmFn, listModels, streamChat } from '../core/llm';
+import { LlmConfig, LlmFn, listModels, streamChat, streamChatOnce } from '../core/llm';
+import { ProbeState, healthView, probeModel, shouldProbe } from '../core/modelHealth';
+import { SamplingOverride, resolveSampling, sanitizeOverride } from '../core/sampling';
 import { McpManager, ServerStatus, mcpConfigHash, parseMcpConfig } from '../core/mcp';
 import { filterFiles } from '../core/mentions';
 import { Effort, Mode, isEffort, isMode } from '../core/policy';
 import { AgentSettings, AgentSpec, AgentWorktreeRef, SessionManager } from '../core/runtime';
 import { FileIndex, findRipgrep, ripgrepCandidates } from '../core/search';
+import { DEFAULT_PROMPT_TOKENS, RepoMaps, repoMapTool } from '../core/repoMap';
 import { SessionStore2, StoredSessionSummary } from '../core/store';
 import { ScopeContext, SessionScope, workspaceKey } from '../core/workspaceScope';
 import { UsageTracker } from '../core/usage';
+import { EditStats, formatEditStats } from '../core/editStats';
 import { DiffContentProvider } from './diffProvider';
 import { SessionPanel } from './sessionPanel';
 import { createVsCodeTools } from './vscodeTools';
 import { createNavTools } from './navTools';
+import { repoMapSymbolsFor } from './repoMapSymbols';
+import { createEditDiagnostics } from './editDiagnostics';
 import { ChangeJournal, isArtifactPath } from '../core/changeJournal';
 import { fetchContextWindow } from '../core/modelInfo';
 import { IgnoreMatcher, createIgnore } from '../core/glob';
@@ -37,6 +45,8 @@ import { createNotifier } from './features/notifications';
 import type { Scheduler } from './features/scheduler';
 import { createTerminalRunner } from './features/terminalRunner';
 import { WebService } from './features/web';
+import { TestingService } from './features/testing';
+import { semanticRankerFactory } from './features/semanticSearch';
 
 export const PANEL_TYPE = 'infraonAssistant.session';
 const OTHER_WORKSPACE = 'That session belongs to another workspace. Open it from the VS Code window of that folder.';
@@ -50,8 +60,16 @@ export class Hub {
   readonly usage: UsageTracker;
   readonly index: FileIndex;
   private fsOptions: FsToolsOptions;
+  /** Repo maps per folder (system prompt section and the repo_map tool); the primary folder shares the file index. */
+  private readonly repoMaps = new RepoMaps((root) => (root === this.root ? this.index : new FileIndex(root)), {
+    symbolsFor: repoMapSymbolsFor(() => this.cfg.get<boolean>('repoMap.enabled', true) && this.cfg.get<boolean>('repoMap.useLanguageServer', true)),
+  });
+  private readonly repoMapTool = repoMapTool(this.repoMaps);
   private fsTools: ReturnType<typeof createFsTools>;
   private mcp: McpManager;
+  /** Local counts of edit tool outcomes for this window (command "Show Edit Statistics"); never sent anywhere. */
+  readonly editStats = new EditStats();
+  private readonly editDiagnostics = createEditDiagnostics(() => this.cfg.get<boolean>('diagnosticsAfterEdit', true));
   private mcpLoaded = false;
   private mcpErrors: string[] = [];
   private panels = new Map<string, SessionPanel>();
@@ -71,12 +89,15 @@ export class Hub {
   agentTypeErrors: string[] = [];
   skills: Skill[] = [];
   skillErrors: string[] = [];
+  /** The gateway check (model list); llmInfo combines it with the model probe below for the sidebar. */
   health: { ok?: boolean; ms?: number; error?: string; at?: number } = {};
+  private modelProbe: ProbeState = { inFlight: false };
   policy: CentralPolicy = {};
   readonly policyReady: Promise<void>;
   readonly safety: SafetyCenter;
   readonly remote: RemoteService;
   readonly web: WebService;
+  readonly testing: TestingService;
   private terminal = createTerminalRunner();
   private memoryCache = new MemoryCache();
   private notifier: ReturnType<typeof createNotifier>;
@@ -106,13 +127,19 @@ export class Hub {
     });
     this.safety.web = { policy: () => this.web.policy(), approved: (sid) => this.web.approved(sid) };
     ctx.subscriptions.push(this.web);
+    this.testing = new TestingService({
+      ctx, output: this.output, get cfg() { return hub.cfg; },
+      addKnownSecret: (v, k) => this.safety.addKnownSecret(v, k),
+      vision: () => (this.web.visionModel() ? (dataUrl, q, signal) => this.web.describeImage(dataUrl, q, signal) : undefined),
+    });
+    this.safety.testing = { currentUrl: (sid) => this.testing.currentUrl(sid) };
     this.policyReady = loadPolicy({ url: this.cfg.get<string>('policyUrl', '') || undefined, cacheFile: path.join(ctx.globalStorageUri.fsPath, 'policy-cache.json') }).then((r) => {
       this.policy = r.policy;
       for (const e of r.errors) { this.output.appendLine(`[policy] ${e}`); }
       void this.loadSkills();
       this.scheduleRefresh();
     });
-    this.fsOptions = { index: this.index };
+    this.fsOptions = { index: this.index, semantic: semanticRankerFactory(this) };
     this.fsTools = createFsTools(this.fsOptions);
     const watcher = vscode.workspace.createFileSystemWatcher('**/*', false, true, false);
     watcher.onDidCreate(() => this.index.invalidate());
@@ -299,7 +326,8 @@ export class Hub {
   }
 
   /** Every tool an agent of session `sid` can use (web tools keep their sources and approvals per session). */
-  private allTools(sid = '_shared') { return [...this.fsTools, ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.mcp.tools()]; }
+  /** browserKey: whose test browser the testing tools drive (each sub-agent gets its own, so parallel testers do not collide). */
+  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, ...this.repoMapTools(), ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
 
   checkpointsFor(sid: string, aid: string): CheckpointStore { return new CheckpointStore(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid, aid)); }
 
@@ -327,7 +355,7 @@ export class Hub {
     const llm = this.llmFor(sid);
     return {
       root: this.root, llmConfig: () => this.llmConfig(),
-      llm: async (cfg, messages, tools, onToken, signal) => { const r = await llm(cfg, messages, tools, onToken, signal); return { ...r, content: this.safety.vault(sid).restore(r.content) }; },
+      llm: async (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => { const r = await llm(cfg, messages, tools, onToken, signal, onToolProgress, onEvent); return { ...r, content: this.safety.vault(sid).restore(r.content) }; },
       startSession: async (prompt) => { const s = this.manager.newSession(); await this.openSession(s.id); void this.manager.send(s.id, s.main().id, prompt).catch(() => undefined); },
     };
   }
@@ -353,12 +381,18 @@ export class Hub {
     if (s.main().status === 'error') { throw new Error(s.main().error ?? 'The scheduled task failed.'); }
   }
 
-  /** Commands that check the project after the agent changes code: the user's setting, else INFRAON.md, else detected. */
+  /**
+   * Commands that check the project after the agent changes code: the user's setting, else INFRAON.md, else detected.
+   * With checks.relatedTestsFirst off, no test check keeps its related form, so fix rounds run the full commands.
+   */
   private async projectChecks(root: string): Promise<CheckCommand[]> {
     if (!this.cfg.get<boolean>('autoVerify', true)) { return []; }
+    const related = this.cfg.get<boolean>('checks.relatedTestsFirst', true);
     const custom = (this.cfg.get<unknown[]>('verifyCommands', []) ?? []).filter((c): c is string => typeof c === 'string' && !!c.trim());
-    if (custom.length) { return custom.map((command) => ({ name: 'verify', command: command.trim(), timeoutSeconds: 600 })); }
-    return detectVerifyCommands(root);
+    const checks: CheckCommand[] = custom.length
+      ? custom.map((c) => { const command = c.trim(); const r = relatedTestsFor(command); return { name: 'verify', command, timeoutSeconds: 600, ...(r ? { related: r } : {}) }; })
+      : await detectVerifyCommands(root);
+    return related ? checks : checks.map(({ related: _, ...c }) => c);
   }
 
   /** Every file change in the workspace, from any source, so the agents' checks also cover commands and sub-agents. */
@@ -398,6 +432,21 @@ export class Hub {
     return reported ?? this.cfg.get<number>('contextWindow', 262144);
   }
 
+  private repoMapTools() { return this.cfg.get<boolean>('repoMap.enabled', true) ? [this.repoMapTool] : []; }
+
+  /** The repo map for the system prompt; '' when turned off or not built within the time box (it is ready next turn). */
+  private repoMapSection(root: string): Promise<string> | string {
+    if (!vscode.workspace.workspaceFolders?.length || !this.cfg.get<boolean>('repoMap.enabled', true)) { return ''; }
+    return this.repoMaps.promptSection(root, { budgetTokens: this.cfg.get<number>('repoMap.maxTokens', DEFAULT_PROMPT_TOKENS) });
+  }
+
+  /** Prints the edit statistics (counts, reason codes, model ids, extensions only) to the output channel. */
+  showEditStats(): void {
+    this.output.appendLine('');
+    this.output.appendLine(formatEditStats(this.editStats.snapshot()));
+    this.output.show(true);
+  }
+
   /** All workspace folders (multi-root workspaces have several). */
   workspaceRoots(): WorkspaceRoot[] {
     return (vscode.workspace.workspaceFolders ?? []).map((f) => ({ name: f.name, path: f.uri.fsPath }));
@@ -419,15 +468,21 @@ export class Hub {
       guard: this.safety.guardFor(sid, aid, root, !!sub),
       llm: this.llmFor(sid),
       getConfig: (o) => this.llmConfig(o.model),
-      tools: () => (sub ? toolsForType(this.allTools(sid), sub, DELEGATION_TOOLS) : this.allTools(sid)),
+      tools: () => (sub ? toolsForType(this.allTools(sid, `${sid}#${aid}`), sub, DELEGATION_TOOLS) : this.allTools(sid)),
       memory: () => this.loadMemory(),
       checks: sub ? undefined : () => this.projectChecks(root),
+      repoMap: () => this.repoMapSection(root),
       // An agent in its own worktree works outside the workspace: workspace changes and folders are not its own.
       fileChanges: root === this.root ? this.journal : undefined,
       roots: root === this.root ? () => this.workspaceRoots() : undefined,
+      diagnostics: this.editDiagnostics,
+      editStats: this.editStats,
       limits: () => ({ maxIterations: this.cfg.get<number>('maxIterations', 1200), maxTokens: this.cfg.get<number>('maxOutputTokens', 0) }),
       snapshot: (turn, abs) => checkpoints.snapshot(turn, abs),
       restore: (turn) => checkpoints.restore(turn),
+      selfReview: sub ? undefined : () => parseSelfReviewSetting(this.cfg.get<string>('selfReview', 'high')),
+      planFirst: sub ? undefined : () => parsePlanFirstSetting(this.cfg.get<string>('planFirst', 'max')),
+      original: (turn, abs) => checkpoints.originalIn(turn, abs),
       contextLimit: () => this.contextWindow(),
       compactRatio: () => this.cfg.get<number>('autoCompactThreshold', 0.75),
       activeFile: () => {
@@ -477,8 +532,9 @@ export class Hub {
     const chosen = this.allowedModel(model || this.defaults().model);
     if (!isModelAllowed(this.policy, chosen)) { throw new Error(`Your organization's policy does not allow the model "${chosen}".`); }
     const idle = this.cfg.get<number>('llmIdleTimeoutSeconds', 180);
+    const { temperature, sampling } = resolveSampling(chosen, this.samplingOverride());
     const cfg: LlmConfig = {
-      baseUrl: this.policy.baseUrl ?? this.cfg.get('baseUrl', ''), model: chosen, apiKey, temperature: 0.2,
+      baseUrl: this.policy.baseUrl ?? this.cfg.get('baseUrl', ''), model: chosen, apiKey, temperature, sampling,
       allowSelfSigned: this.policy.allowSelfSignedTls ?? this.cfg.get('allowSelfSignedTls', true),
       idleTimeoutMs: idle > 0 ? idle * 1000 : undefined,
     };
@@ -490,6 +546,16 @@ export class Hub {
     }
     this.lastModel = chosen;
     return cfg;
+  }
+
+  /**
+   * The user's explicit sampling values: the Sampling object, over a Temperature the user actually set (its default
+   * must not hide the model's recommended temperature). Everything else comes from the model's profile.
+   */
+  private samplingOverride(): SamplingOverride {
+    const t = this.cfg.inspect<number>('temperature');
+    const temperature = t?.workspaceFolderValue ?? t?.workspaceValue ?? t?.globalValue;
+    return { ...sanitizeOverride({ temperature }), ...sanitizeOverride(this.cfg.get('sampling')) };
   }
 
   /** The project memory file in use (CLAUDE.md, INFRAON.md or AGENTS.md), shown in the context popup. */
@@ -631,14 +697,18 @@ export class Hub {
     try { host = new URL(host).host; } catch { /* keep raw */ }
     const running = this.manager.snapshot().flatMap((s) => s.agents).filter((a) => a.status === 'running' || a.status === 'waiting').length;
     return {
-      endpoint: host, model: this.defaults().model, models: this.models, health: this.health,
+      endpoint: host, model: this.defaults().model, models: this.models, health: healthView(this.health, this.modelProbe, this.defaults().model, this.probeMinutes() > 0),
       contextWindow: this.cfg.get<number>('contextWindow', 131072), running, queued: this.manager.snapshot().flatMap((s) => s.agents).filter((a) => a.status === 'queued').length,
       maxConcurrent: this.cfg.get<number>('maxConcurrentAgents', 4), usage: this.usage.summary(),
       mcp: this.mcp.status().map((s) => ({ name: s.name, status: s.status, tools: s.tools })),
     };
   }
 
-  async checkHealth(): Promise<void> {
+  /**
+   * Checks the gateway (model list), then probes the selected model when one is due (see modelHealth.ts) without
+   * waiting for it. `force` is the sidebar's refresh button: probe now unless a probe is already running.
+   */
+  async checkHealth(force = false): Promise<void> {
     const t0 = Date.now();
     try {
       this.models = (await listModels(await this.llmConfig(undefined, false))).filter((m) => isModelAllowed(this.policy, m));
@@ -649,6 +719,30 @@ export class Hub {
       this.health = { ok: false, ms: Date.now() - t0, error: e.message ?? String(e), at: Date.now() };
     }
     this.scheduleRefresh();
+    if (this.health.ok) { void this.checkModel(force); }
+  }
+
+  /** infraonAssistant.modelProbeMinutes; 0 = off. Off in the UI tests, which count the fake gateway's chat requests. */
+  private probeMinutes(): number {
+    const m = this.cfg.get<number>('modelProbeMinutes', 5);
+    return this.e2e || !(m > 0) ? 0 : m;
+  }
+
+  private async checkModel(force: boolean): Promise<void> {
+    const model = this.defaults().model;
+    if (!shouldProbe(this.modelProbe, model, Date.now(), { force, intervalMs: this.probeMinutes() * 60_000 })) { return; }
+    this.modelProbe.inFlight = true;
+    this.scheduleRefresh();
+    try {
+      // The bare streaming call: no retries, no usage count, no sampling extras (probeModel strips them).
+      this.modelProbe.last = await probeModel(streamChatOnce, await this.llmConfig(model, false));
+      if (!this.modelProbe.last.ok) { this.output.appendLine(`[health] ${model} did not answer the probe: ${this.modelProbe.last.error}`); }
+    } catch (e: any) {
+      this.output.appendLine(`[health] model probe skipped: ${e.message ?? e}`);
+    } finally {
+      this.modelProbe.inFlight = false;
+      this.scheduleRefresh();
+    }
   }
 
   async deleteSession(sid: string): Promise<void> {
@@ -660,6 +754,7 @@ export class Hub {
     await this.manager.deleteSession(sid);
     await fs.rm(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid), { recursive: true, force: true });
     this.safety.forget(sid);
+    await this.testing.closeSession(sid);
     this.storedCache = undefined;
     this.scheduleRefresh();
   }

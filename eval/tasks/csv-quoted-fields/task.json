@@ -1,0 +1,10 @@
+{
+    "name": "csv-quoted-fields",
+    "prompt": "Bug report: importing contacts fails when a company name contains a comma, e.g. \"Acme, Inc.\" - the row gets an extra column. Make parseCsv in src/csv.js follow RFC 4180 quoting: a quoted field may contain commas, line breaks and doubled quotes (\"\" stands for one quote character). Accept both LF and CRLF line endings, and don't produce an empty row for a trailing line break.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "hidden-tests", "parsing"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

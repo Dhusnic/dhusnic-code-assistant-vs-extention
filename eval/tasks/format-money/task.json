@@ -1,0 +1,13 @@
+{
+    "name": "format-money",
+    "prompt": "formatMoney in src/money.js prints -1234.5 dollars as \"$-1234.50\". Fix it: amounts are integer cents; the result has a thousands separator, two decimals, and the minus sign before the currency symbol (formatMoney(-123450) === \"-$1,234.50\", formatMoney(5) === \"$0.05\"). The optional second argument is the currency code: USD ($, the default), EUR (€) and GBP (£) put the symbol first; INR uses ₹. An unknown code throws an Error whose message names the code.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": [
+        "bugfix",
+        "hidden-tests"
+    ],
+    "difficulty": "easy",
+    "language": "javascript"
+}

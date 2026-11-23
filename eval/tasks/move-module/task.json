@@ -1,0 +1,10 @@
+{
+    "name": "move-module",
+    "prompt": "We are retiring the src/utils folder. Move src/utils/strings.js to src/text/strings.js and update every require in the project, tests included. Do not leave a file or a re-export behind at the old path, and don't change behaviour.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["refactor", "multi-file", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

@@ -157,11 +157,11 @@ export class WebService implements vscode.Disposable {
   }
 
   /** A vision model, when the routing names one or one of the gateway's models is recognisably multimodal. */
-  private visionModel(): string | undefined {
+  visionModel(): string | undefined {
     return this.host.routing.vision || inferRouting(this.host.models).vision;
   }
 
-  private async describeImage(dataUrl: string, question: string, signal: AbortSignal): Promise<string> {
+  async describeImage(dataUrl: string, question: string, signal: AbortSignal): Promise<string> {
     const model = this.visionModel();
     if (!model) { return ''; }
     const cfg = { ...(await this.host.llmConfig(model, false)), temperature: 0, maxTokens: 1500 };

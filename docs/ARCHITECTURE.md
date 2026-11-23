@@ -25,12 +25,13 @@ User types in the session tab (media/session.js)
   → postMessage → SessionPanel (host/sessionPanel.ts)
   → Runtime (core/runtime.ts): finds the session and its main agent, queues input while it is busy
   → Agent.send (core/agent.ts): the tool loop
-       build system prompt (prompts.ts + memory files + skills + verify commands)
+       build system prompt (prompts.ts + memory files + skills + verify commands + repo map)
        → llm.streamChat (llm.ts, OpenAI-compatible /chat/completions, streaming, retries)
        → tool calls: scheduler.ts groups independent calls to run in parallel
        → each call: permission check (permissions.ts, hooks.ts, guard) → approval if needed → tool.run
        → results are added to the history; compaction.ts summarizes when the context is nearly full
-       → after edits: verify.ts runs the project's checks; failures go back to the model
+       → after edits: verify.ts runs the project's checks; failures go back to the model (a fix round
+         is checked with the related tests first, then the full checks give the verdict: checks.ts)
   → UI events (tokens, tool cards, approvals, todos) → Runtime transcript → webview
 ```
 
@@ -38,15 +39,15 @@ User types in the session tab (media/session.js)
 
 | Area | Files |
 |---|---|
-| Agent loop, sub-agents, plan mode | `core/agent.ts` (the loop), `core/agentContracts.ts` (UI, guard and dependency interfaces), `core/agentTools.ts` (built-in tool specs, system prompt), `core/checks.ts` (project checks), `core/agentTypes.ts`, `core/runtime.ts`, `core/notify.ts` |
-| LLM client | `core/llm.ts` (streaming, retry, idle timeout), `core/textToolCalls.ts` (tool calls written as text), `core/modelInfo.ts`, `core/modelRouting.ts`, `core/usage.ts` |
-| Tools | `core/tool.ts` (contracts), `core/fstools.ts` (files, search, commands), `core/search.ts` (ripgrep and a built-in fallback), `core/codeSearch.ts` (`search_code`: local BM25 ranking of code regions), `host/vscodeTools.ts` and `host/navTools.ts` (diagnostics, symbols, references) |
+| Agent loop, sub-agents, plan mode | `core/agent.ts` (the loop), `core/agentContracts.ts` (UI, guard and dependency interfaces), `core/agentTools.ts` (built-in tool specs, system prompt), `core/checks.ts` (project checks), `core/checkDigest.ts` (condensed check-failure feedback), `core/loopGuard.ts` (nudges when the model repeats itself), `core/selfReview.ts` (fresh-context review of the turn's diff before it ends), `core/planFirst.ts` (holds the first unplanned file change of a turn until a task list exists), `core/agentTypes.ts`, `core/runtime.ts`, `core/notify.ts` |
+| LLM client | `core/llm.ts` (streaming, retry, idle timeout), `core/sampling.ts` (sampling per model family), `core/textToolCalls.ts` (tool calls written as text), `core/modelInfo.ts`, `core/modelRouting.ts`, `core/usage.ts`, `core/modelHealth.ts` (sidebar Status: model list plus a one-token probe of the selected model) |
+| Tools | `core/tool.ts` (contracts), `core/fstools.ts` (files, search, commands), `core/search.ts` (ripgrep and a built-in fallback), `core/codeSearch.ts` (`search_code`: local BM25 ranking of code regions), `core/repoMap.ts` (repo map in the system prompt and the `repo_map` tool; `host/repoMapSymbols.ts` refines it with language-server symbols), `core/hybridSearch.ts` + `core/embeddings.ts` (optional: fuses BM25 with gateway embeddings when `embeddingModel` resolves to a model; the default `auto` does so only when the gateway lists an embedding model; wired by `host/features/semanticSearch.ts`), `host/vscodeTools.ts` and `host/navTools.ts` (diagnostics, symbols, references), `core/editDiagnostics.ts` and `host/editDiagnostics.ts` (new errors appended to edit results) |
 | Safety | `core/permissions.ts`, `core/hooks.ts`, `core/redact.ts` (secret masking), `core/audit.ts`, `core/policy.ts`, `core/centralPolicy.ts`, `host/features/guard.ts` |
 | History and undo | `core/store.ts`, `core/sessions.ts`, `core/checkpoints.ts`, `core/changeJournal.ts`, `core/changes.ts` |
 | Context | `core/memoryFiles.ts`, `core/mentions.ts`, `core/skills.ts`, `core/teamSkills.ts`, `core/compaction.ts`, `core/handoff.ts` |
 | Remote servers | `core/ssh.ts`, `core/remoteTools.ts`, `host/features/remote.ts`, `host/features/servers.ts` |
 | Web access | `core/web/` (see `core/web/types.ts` for the layout) |
-| Editor features | `host/completions.ts`, `core/inlineEdit.ts`, `host/features/editorActions.ts` (light-bulb actions: fix, edit, document, generate tests), `host/features/scm.ts` (commit message button in Source Control), `host/diffProvider.ts` |
+| Editor features | `host/completions.ts` + `core/completion.ts` (ghost text: FIM via `/completions` per model family in `core/fim.ts`, chat fallback; open-tab and imported-signature context from `core/completionContext.ts`), `core/inlineEdit.ts`, `host/features/editorActions.ts` (light-bulb actions: fix, edit, document, generate tests), `host/features/scm.ts` (commit message button in Source Control), `host/diffProvider.ts` |
 | Updates | `core/updater.ts`, `core/updateKey.ts`, `host/updater.ts`, `scripts/sign-update.js` |
 
 ## Activation and loading

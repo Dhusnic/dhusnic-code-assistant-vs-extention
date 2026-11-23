@@ -180,7 +180,7 @@ test('unknown type and nested delegation attempts are reported, never crash', as
   });
   const s = h.mgr.newSession();
   await h.mgr.send(s.id, 'a1', 'bad type');
-  assert.match(toolMsgs(h.mgr.agent(s.id, 'a1').agent.history)[0], /unknown agent type "wizard"\. Available types: general-purpose, explore, plan, researcher, fork/);
+  assert.match(toolMsgs(h.mgr.agent(s.id, 'a1').agent.history)[0], /unknown agent type "wizard"\. Available types: general-purpose, explore, plan, researcher, tester, fork/);
   await h.mgr.send(s.id, 'a1', 'nest');
   const outer = subs(h, s.id)[0];
   assert.match(toolMsgs(h.mgr.agent(s.id, outer.id).agent.history)[0], /sub-agents cannot start further sub-agents/);

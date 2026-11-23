@@ -1,0 +1,10 @@
+{
+    "name": "logger-redact",
+    "prompt": "Security review finding: our JSON logger writes passwords and tokens into the logs. Change src/logger.js so that, before a log line is written, every field whose key contains password, secret, token or authorization (case-insensitive, so accessToken and Authorization count) has its value replaced by the string \"[REDACTED]\", at any depth, including objects inside arrays. The caller's objects must not be modified, and the line format stays the same.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["feature", "security", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

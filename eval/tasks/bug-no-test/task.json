@@ -4,5 +4,7 @@
     "check": "node __grade__.js",
     "hiddenTests": "hidden",
     "timeoutSeconds": 600,
-    "tags": ["bugfix", "no-test"]
+    "tags": ["bugfix", "no-test"],
+    "difficulty": "easy",
+    "language": "javascript"
 }

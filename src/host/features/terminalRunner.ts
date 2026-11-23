@@ -12,6 +12,12 @@ const STOP_GRACE_MS = 2000;
 const END_GRACE_MS = 500;
 const KEEP_JOBS = 20;
 const KEEP_TERMINALS = 5;
+/**
+ * Environment for the agent's commands. The terminal is a real TTY, so test runners (vitest, jest, Create React App)
+ * would otherwise start in watch mode and never exit; CI=true is the standard signal to run once. Merged into the
+ * inherited environment, never replacing it.
+ */
+const AGENT_ENV: Record<string, string> = { CI: 'true' };
 
 const ANSI = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\^_]/g;
 const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
@@ -183,7 +189,7 @@ export function createTerminalRunner(): { tools(): Tool[]; dispose(): void } {
     // powershell -Command reduces every failure to exit 1, so the real exit code is passed on explicitly.
     const script = `${job.command}\n$ok = $?; if ($ok) { exit 0 }; if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1`;
     const child = spawn(isWin ? 'powershell.exe' : 'bash', isWin ? ['-NoProfile', '-Command', script] : ['-lc', job.command],
-      { cwd: job.cwd, detached: !isWin, windowsHide: true });
+      { cwd: job.cwd, detached: !isWin, windowsHide: true, env: { ...process.env, ...AGENT_ENV } });
     job.interrupt = () => killTree(child);
     const pty: vscode.Pseudoterminal = {
       onDidWrite: writer.event,
@@ -205,7 +211,7 @@ export function createTerminalRunner(): { tools(): Tool[]; dispose(): void } {
     try {
       const win = vscode.window as any;
       if (typeof win.onDidChangeTerminalShellIntegration === 'function' && typeof win.onDidEndTerminalShellExecution === 'function') {
-        const term = vscode.window.createTerminal({ name: job.name, cwd: job.cwd });
+        const term = vscode.window.createTerminal({ name: job.name, cwd: job.cwd, env: AGENT_ENV });
         const integration = await waitForIntegration(term);
         if (job.status !== 'running' || disposed) { term.dispose(); return; }
         if (integration) { runIntegrated(job, term, integration); return; }

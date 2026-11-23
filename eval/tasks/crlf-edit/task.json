@@ -6,5 +6,7 @@
     "crlf": ["src/config.js"],
     "mustNotChange": ["test/**"],
     "timeoutSeconds": 600,
-    "tags": ["edit", "line-endings"]
+    "tags": ["edit", "line-endings"],
+    "difficulty": "easy",
+    "language": "javascript"
 }

@@ -6,7 +6,11 @@
  * Split across modules, all re-exported from here so callers import from './agent' only:
  *   agentContracts.ts  the interfaces to the UI, the safety layer, the host's dependencies and sub-agent spawning
  *   agentTools.ts      the built-in tools as the model sees them, and the system prompt
- *   checks.ts          which project checks to run for a set of changes, and how their output is read
+ *   checks.ts          which project checks to run for a set of changes, and how their output is read. A fix round is
+ *                      verified with the related tests first; the full checks always give the final verdict
+ *   loopGuard.ts       notices the model repeating itself within a turn, and the reminders that nudge it out
+ *   selfReview.ts      the once-per-turn fresh-context review of the turn's diff before a turn that changed files ends
+ *   planFirst.ts       holds the turn's first file change until the model has written a task list (once per turn)
  */
 import { ChatMessage, StreamResult, ToolCall, ToolSpec } from './llm';
 import { contextLimitFromError, isContextLengthError } from './modelInfo';
@@ -18,11 +22,16 @@ import { TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoRemi
 import { SKILL_TOOL, expandSkill, findSkill, skillToolSpec } from './skills';
 import { Mode, effortParams, isAllowed, requiresApproval } from './policy';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
-import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact } from './compaction';
+import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, attachWorkingState, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact, workingStateFor } from './compaction';
 import * as path from 'path';
-import { FileReadTracker, clipOutput, resolveIn } from './fstools';
+import { FileReadTracker, resolveIn } from './fstools';
+import { LoopGuard, withNudge } from './loopGuard';
+import { EDIT_STAT_TOOLS } from './editStats';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
-import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, MAX_CHECK_ROUNDS, NOT_RUN, checkLabel, checksPromptSection, exitCodeOf, scopeChecks } from './checks';
+import { selfReview, shouldSelfReview } from './selfReview';
+import { PlanFirstGate, planFirstActive, planFirstMessage } from './planFirst';
+import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, narrowCheck, narrowedLabel, sameDigest, scopeChecks } from './checks';
+import { findTestFiles } from './verify';
 import {
   AGENT_TOOL, DELEGATION_TOOLS, PLAN_SPEC, PLAN_TOOL, QUESTION_SPEC, QUESTION_TOOL, SEND_SPEC, SEND_TOOL, TODO_SPEC, TODO_TOOL,
   agentToolSpec, buildSystemPrompt, queuedMessageText,
@@ -44,6 +53,12 @@ export const MAX_CUT_OFF_RECOVERIES = 3;
 /** How many times one turn may compact and retry after the model said the request was too long. */
 export const MAX_OVERFLOW_RETRIES = 2;
 const isJson = (s: string): boolean => { try { JSON.parse(s || '{}'); return true; } catch { return false; } };
+
+/** How a run of the project checks ended; `index` is the check it stopped at (checks.length when all passed). */
+interface CheckOutcome {
+  status: 'passed' | 'failed' | 'skipped'; index: number;
+  failed?: { name: string; command: string; output: string; narrowed: boolean };
+}
 
 /** Tokens one model call consumed: the gateway's own count, or an estimate when it does not report usage. */
 export function tokensSpent(res: Pick<StreamResult, 'usage' | 'content' | 'toolCalls'>, sent: ChatMessage[]): number {
@@ -176,6 +191,8 @@ export class Agent {
       return true;
     }
     const signal = this.abort?.signal ?? new AbortController().signal;
+    // What was changed, planned and checked so far, appended after the summary so the model does not lose track of it.
+    const state = (forSummary: boolean) => workingStateFor(this.history, this.turnStarts, (n) => this.toolFor(n)?.kind === 'edit', { changed: this.track.changed, todos: this.todoState().todos, checks: this.track.verified }, forSummary);
     try {
       // The latest task list survives the summary, so reminders about unfinished steps keep working afterwards.
       const { todos } = this.todoState();
@@ -188,12 +205,12 @@ export class Agent {
         const out = await this.deps.llm(cfg, sent, [], () => {}, signal);
         ui.spent?.(tokensSpent(out, sent));
         return out.content;
-      }, carry);
-      this.history = res.summarized ? res.history : pruneToolOutputs(this.history, 2, 600);
+      }, carry, state(true));
+      this.history = res.summarized ? res.history : attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
       if (res.summarized) { this.turnStarts = res.turnStarts; }
     } catch (e: any) {
       if (e.message === 'Cancelled') { throw e; }
-      this.history = pruneToolOutputs(this.history, 2, 600);
+      this.history = attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
       ui.info(`Could not summarize the conversation (${e.message}); trimmed old tool output instead.`);
     }
     const after = estimateTokens(this.history);
@@ -289,11 +306,20 @@ export class Agent {
 
     let stopContinues = 0;
     let checkRounds = 0;
+    const maxCheckRounds = checkRoundsFor(run.effort);
+    let lastDigest = '';
     let cutOffs = 0;
     let overflows = 0;
     /** Tool rounds in this turn, and whether the end-of-turn task-list reminder was sent. */
     let toolRounds = 0;
     let todoEndNudged = false;
+    /** Notices the model repeating itself (same call, failing edits or commands) and nudges it; reset per turn. */
+    const loop = new LoopGuard();
+    let reviewed = false;
+    /** Holds the turn's first file change until a task list exists (planFirst.ts); the setting is read once per turn. */
+    const planFirstSetting = this.deps.planFirst?.();
+    const planFirstOn = (): boolean => planFirstActive(planFirstSetting, run.effort, run.mode, !!this.deps.subagent);
+    const planGate = new PlanFirstGate(planFirstOn, !!unfinishedTodos(this.todoState().todos ?? []).length);
     /** Files changed since the checks last ran. */
     let dirty = false;
     this.track = { changed: new Set(), abs: new Set(), verified: [] };
@@ -304,7 +330,7 @@ export class Agent {
     if (early.length) { dirty = true; this.noteChanged(early); }
     try {
       let checks = await this.loadChecks();
-      const checksSection = checksPromptSection(checks);
+      const checksSection = [checksPromptSection(checks), await this.loadRepoMap()].filter(Boolean).join('\n\n');
       const submitted = await this.deps.guard?.onPrompt?.(userText, signal);
       if (submitted?.blocked) {
         const text = `Blocked by a hook: ${submitted.reason ?? 'no reason given'}`;
@@ -321,17 +347,25 @@ export class Agent {
         // The user may have switched modes during the last step: the next model call and its tools follow the new one.
         this.syncMode(run);
         await this.compact(opts, ui, false);
-        const cfg = { ...(await this.deps.getConfig(opts)), temperature: ep.temperature, maxTokens: ep.maxTokens };
+        const cfg = { ...(await this.deps.getConfig(opts)), maxTokens: ep.maxTokens };
         const memory = (await this.deps.memory?.()) ?? '';
         const system: ChatMessage = {
           role: 'system',
-          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots),
+          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots, planFirstOn()),
         };
         const specs = this.specsFor(run.mode);
         this.lastContext = measureContext(system.content ?? '', memory, specs);
         let res: StreamResult;
         try {
-          res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal);
+          ui.modelCall?.('waiting');
+          try {
+            res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal, (p) => ui.toolWriting?.(p), (ev) => {
+              if (ev.type === 'receiving') { ui.modelCall?.('receiving'); return; }
+              // A retry is a new request: say why, and wait for its first byte again.
+              ui.info(ev.message);
+              ui.modelCall?.('waiting');
+            });
+          } finally { ui.modelCall?.('done'); }
         } catch (e) {
           // Too long for the model: learn its real limit from the error, shorten the conversation and try again.
           if (!isContextLengthError(e) || overflows >= MAX_OVERFLOW_RETRIES) { throw e; }
@@ -376,22 +410,51 @@ export class Agent {
           const scoped = dirty ? scopeChecks(checks, [...this.track.changed]) : [];
           if (dirty && checks.length && !scoped.length) { dirty = false; ui.info('Only documentation changed: project checks skipped.'); }
           // The model already ran every check after its last change and they passed: no need to run them again.
-          if (dirty && this.alreadyVerified(checks, scoped)) { dirty = false; }
+          if (dirty && this.alreadyVerified(checks)) { dirty = false; }
+          /** Checks still failing after the last allowed fix attempt: a review of that diff would only add noise. */
+          let checksUnresolved = false;
           if (dirty && scoped.length && run.mode !== 'plan' && this.toolFor('run_command')) {
             dirty = false;
-            const failed = await this.runChecks(scoped, run, ui, signal, turn);
+            // A fix attempt is verified with the tests related to the changed files first (fast feedback). A narrowed
+            // run is never the verdict: when it passes, the full form runs before the turn may finish.
+            const plan = checkRounds > 0 ? await this.narrowChecks(scoped) : scoped;
+            const narrowed = plan.filter((c) => c.narrowed);
+            if (narrowed.length) { ui.info(`Running the related tests first: ${narrowed.map(narrowedLabel).join(', ')}.`); }
+            let outcome = await this.runChecks(plan, run, ui, signal, turn);
+            if (outcome.status === 'passed' && narrowed.length) {
+              ui.info(`Related tests passed; running the full suite before finishing: ${narrowed.map((c) => checkLabel(c.narrowed!.full.command)).join(', ')}.`);
+              outcome = await this.runChecks(narrowed.map((c) => c.narrowed!.full), run, ui, signal, turn);
+            }
+            let failed = outcome.failed;
+            // A fix attempt that leaves exactly the same failure behind is no progress: stop instead of retrying.
+            let digest = failed ? digestCheckOutput(failed.name, failed.command, failed.output, CHECK_OUTPUT_CHARS) : '';
+            let stuck = sameDigest(digest, lastDigest);
+            // A narrowed failure that ends the retries: the full form (from that check on) gives the verdict instead.
+            if (failed?.narrowed && (checkRounds >= maxCheckRounds || stuck)) {
+              outcome = await this.runChecks(plan.slice(outcome.index).map((c) => c.narrowed?.full ?? c), run, ui, signal, turn);
+              failed = outcome.failed;
+              digest = failed ? digestCheckOutput(failed.name, failed.command, failed.output, CHECK_OUTPUT_CHARS) : '';
+              stuck = sameDigest(digest, lastDigest);
+            }
+            lastDigest = digest;
+            if (outcome.status === 'passed') { ui.info(`Project checks passed: ${scoped.map((c) => c.name).join(', ')}.`); }
             if (failed) {
-              if (checkRounds < MAX_CHECK_ROUNDS) {
+              if (checkRounds < maxCheckRounds && !stuck) {
                 checkRounds++;
-                this.history.push({
-                  role: 'user',
-                  content: `The project checks failed after your changes (automatic check ${checkRounds} of ${MAX_CHECK_ROUNDS}). Read the output, fix the root cause, and do not finish until the checks pass. If the failure is unrelated to your change (it was already failing before), say so instead of changing unrelated code.\n\n### ${failed.name}: \`${failed.command}\`\n${clipOutput(failed.output, CHECK_OUTPUT_CHARS)}`,
-                  display: `Checks failed: ${failed.name}`,
-                });
+                this.history.push({ role: 'user', content: checkFailureMessage(digest, checkRounds, maxCheckRounds), display: `Checks failed: ${failed.name}` });
                 continue;
               }
-              ui.info(`Project checks are still failing (${failed.name}: ${failed.command}) after ${MAX_CHECK_ROUNDS} fix attempts. Review the output above.`);
+              checksUnresolved = true;
+              ui.info(stuck
+                ? `Project checks are still failing (${failed.name}: ${failed.command}) with the same errors after the last fix attempt, so no more automatic retries. Review the output above.`
+                : `Project checks are still failing (${failed.name}: ${failed.command}) after ${maxCheckRounds} fix attempts. Review the output above.`);
             }
+          }
+          // Once per turn that changed files: a fresh-context review of the diff; issues go back to the model (selfReview.ts).
+          if (!reviewed && !checksUnresolved && shouldSelfReview(this.deps.selfReview?.(), run.effort, run.mode, !!this.deps.subagent, this.track.abs.size)) {
+            reviewed = true;
+            const issues = await selfReview({ deps: this.deps, run, turn, turnHistory: this.history.slice(this.turnStarts[turn]), files: [...this.track.abs], ui, signal });
+            if (issues) { this.history.push(issues); continue; }
           }
           // Ending a working turn with steps still open leaves the list (and the UI) stuck on a step: ask once to settle it.
           if (!todoEndNudged && toolRounds > 0 && !this.deps.subagent && run.mode !== 'plan') {
@@ -408,7 +471,17 @@ export class Agent {
           this.history.push({ role: 'user', content: `A Stop hook asked you to continue: ${stop.reason ?? 'the task is not finished'}`, display: 'Stop hook: continue' });
           continue;
         }
-        const exec = (tc: ToolCall) => this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn);
+        // Plan first: the turn's first file-changing calls are held (not run) until a task list exists (planFirst.ts).
+        const before = this.history.slice(this.turnStarts[turn], this.history.length - 1);
+        const held = new Set<string>();
+        res.toolCalls.forEach((tc, j) => {
+          const tool = this.toolFor(tc.function.name);
+          const isEdit = tool?.kind === 'edit' && isAllowed(this.syncMode(run), tool.kind);
+          if (planGate.shouldHold(isEdit, before, res.toolCalls.slice(0, j))) { held.add(tc.id); }
+        });
+        planGate.endRound();
+        if (held.size) { ui.info('Plan first: the agent was asked to write a task list before changing files.'); }
+        const exec = (tc: ToolCall) => (held.has(tc.id) ? Promise.resolve(this.holdForPlan(tc, ui)) : this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn));
         for (const batch of planBatches(res.toolCalls, (tc) => this.parallelSafe(tc, run.mode), MAX_PARALLEL_TOOLS)) {
           // Changes from before this batch (the user typing, a background agent) are not this batch's doing.
           if (feed) { cursor = feed.cursor(); }
@@ -418,14 +491,17 @@ export class Agent {
           const external = [...(seen?.paths ?? []), ...this.takePending()];
           if (external.length) { dirty = true; this.noteChanged(external); }
           batch.forEach((tc, j) => {
-            this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] });
+            // A held call did not run: it is neither a failure or repeat for the loop guard nor a change.
+            if (held.has(tc.id)) { this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] }); return; }
+            const loopNudge = loop.observe(tc.function.name, tc.function.arguments, results[j], this.toolFor(tc.function.name)?.kind);
+            this.history.push({ role: 'tool', tool_call_id: tc.id, content: withNudge(results[j], loopNudge, (t) => ui.info(t)) });
             // A command that changed files (a formatter, a code generator) is a change, not a check.
             if (this.noteResult(tc.function.name, tc.function.arguments, results[j], external.length > 0)) { dirty = true; }
           });
         }
         toolRounds++;
         // The task list went stale (many rounds without todo_write): remind the model inside the last tool result.
-        const nudge = this.todoNudge();
+        const nudge = [this.todoNudge(), withNudge('', loop.endRound(), (t) => ui.info(t)).trim()].filter(Boolean).join('\n\n');
         if (nudge) {
           const last = this.history[this.history.length - 1];
           if (last?.role === 'tool') { last.content = `${last.content ?? ''}\n\n${nudge}`; }
@@ -499,10 +575,10 @@ export class Agent {
   }
 
   /** Every project check already ran, and passed, after the last change. */
-  private alreadyVerified(checks: CheckCommand[], scoped: CheckCommand[]): boolean {
+  private alreadyVerified(checks: CheckCommand[]): boolean {
     const passed = (cmd: string) => this.track.verified.some((v) => v.ok && v.label === checkLabel(cmd));
-    // The full command, or its related form for these files, counts.
-    return checks.length > 0 && checks.every((c, i) => passed(c.command) || (scoped[i] !== undefined && passed(scoped[i].command)));
+    // Only the full commands count: a run limited to related tests is never the verdict.
+    return checks.length > 0 && checks.every((c) => passed(c.command));
   }
 
   /**
@@ -553,22 +629,38 @@ export class Agent {
     try { return (await this.deps.checks()).filter((c) => c && typeof c.command === 'string' && c.command.trim()); } catch { return []; }
   }
 
+  /** The repo map section (repoMap.ts), once per turn so every request of the turn sends the same system prompt. */
+  private async loadRepoMap(): Promise<string> {
+    try { return (await this.deps.repoMap?.()) ?? ''; } catch { return ''; }
+  }
+
   /**
    * Runs the checks in order through run_command, so permission rules, approvals, hooks and the audit log apply.
-   * Stops at the first failure and returns it; returns undefined when all pass or the user declined to run them.
+   * Stops at the first failure and returns it (with its index), or at the first check the user declined to run.
    */
-  private async runChecks(checks: CheckCommand[], run: RunOptions, ui: AgentUi, signal: AbortSignal, turn: number): Promise<{ name: string; command: string; output: string } | undefined> {
-    const passed: string[] = [];
+  private async runChecks(checks: CheckCommand[], run: RunOptions, ui: AgentUi, signal: AbortSignal, turn: number): Promise<CheckOutcome> {
     for (let i = 0; i < checks.length; i++) {
       const c = checks[i];
       const out = await this.execTool(`check_${turn}_${i}_${Date.now().toString(36)}`, 'run_command', JSON.stringify({ command: c.command, timeout_seconds: c.timeoutSeconds }), run, ui, signal, turn);
-      this.noteResult('run_command', JSON.stringify({ command: c.command }), out);
-      if (NOT_RUN.test(out)) { ui.info(`Project checks skipped (${c.name} was not run).`); return undefined; }
-      if (exitCodeOf(out) !== 0) { return { name: c.name, command: c.command, output: out }; }
-      passed.push(c.name);
+      // A narrowed run is no evidence for the verification summary: only the full check counts there.
+      if (!c.narrowed) { this.noteResult('run_command', JSON.stringify({ command: c.command }), out); }
+      if (NOT_RUN.test(out)) { ui.info(`Project checks skipped (${c.name} was not run).`); return { status: 'skipped', index: i }; }
+      if (exitCodeOf(out) !== 0) { return { status: 'failed', index: i, failed: { name: c.name, command: c.command, output: out, narrowed: !!c.narrowed } }; }
     }
-    ui.info(`Project checks passed: ${passed.join(', ')}.`);
-    return undefined;
+    return { status: 'passed', index: checks.length };
+  }
+
+  /**
+   * The checks, each test check that has a related form narrowed to this turn's changed files (checks.ts narrowCheck);
+   * a check whose mapping is uncertain stays full. pytest and node --test map to the project's test files.
+   */
+  private async narrowChecks(checks: CheckCommand[]): Promise<CheckCommand[]> {
+    const changed = [...this.track.changed];
+    return Promise.all(checks.map(async (c) => {
+      if (!c.related) { return c; }
+      const testFiles = c.related.testGlobs ? await findTestFiles(this.deps.root, c.related.testGlobs).catch(() => []) : [];
+      return narrowCheck(c, changed, testFiles) ?? c;
+    }));
   }
 
   private hasQueued(): boolean {
@@ -694,6 +786,16 @@ export class Agent {
     return todoReminder(todos, rounds);
   }
 
+  /** A file change held by plan-first: shown as not run, and the model is told to write its task list first. */
+  private holdForPlan(tc: ToolCall, ui: AgentUi): string {
+    const tool = this.toolFor(tc.function.name);
+    let detail = tc.function.name;
+    try { detail = relativizePaths(tool?.describe(JSON.parse(tc.function.arguments || '{}')) ?? detail, this.deps.root); } catch { /* keep the name */ }
+    ui.toolStart(tc.id, tc.function.name, tool?.kind ?? 'edit', tc.function.arguments, detail);
+    ui.toolEnd(tc.id, false, 'Not run yet: plan first (write the task list, then change files)');
+    return planFirstMessage(tc.function.name);
+  }
+
   /** todo_write: replaces the task list shown to the user. */
   private execTodo(id: string, rawArgs: string, ui: AgentUi): string {
     let args: unknown = {};
@@ -793,7 +895,7 @@ export class Agent {
       } catch { /* the tool reports the bad path */ }
     }
     const ctx = {
-      root: this.deps.root, roots, signal, reads: this.reads,
+      root: this.deps.root, roots, signal, reads: this.reads, diagnostics: this.deps.diagnostics,
       snapshot: (abs: string) => this.deps.snapshot?.(turn, abs) ?? Promise.resolve(),
     };
     const allowed = isAllowed(opts.mode, tool.kind);
@@ -809,9 +911,10 @@ export class Agent {
 
     if (!allowed) { return finish(false, `ERROR: ${name} is not allowed in ${opts.mode} mode.`); }
     if (restoreError) { return finish(false, `ERROR: ${restoreError}`); }
-    if (previewError) { return finish(false, `ERROR: ${previewError}`); }
+    if (previewError) { this.recordEdit(name, opts.model, args, previewError); return finish(false, `ERROR: ${previewError}`); }
     const req: ToolRequest = { tool: name, kind: tool.kind, args, root: this.deps.root, mode: opts.mode };
     const started = Date.now();
+    let running = false;
     try {
       // Deny rules are checked first and cannot be overridden by the mode, a hook or an approval.
       let verdict = await this.judge(req);
@@ -832,15 +935,24 @@ export class Agent {
         guard?.onApproval?.(req, out === true ? 'allowed' : 'denied');
         if (out !== true) { return finish(false, out); }
       }
+      running = true;
       const result = await tool.run(args, ctx);
+      this.recordEdit(name, opts.model, args);
       const post = await guard?.afterTool?.(req, true, result, Date.now() - started, signal);
       const notes = [...(post?.context ?? []), ...(post?.blocked ? [`A PostToolUse hook reported a problem: ${post.reason ?? 'no reason given'}`] : [])];
       return finish(true, notes.length ? `${result}\n\n${notes.join('\n')}` : result);
     } catch (e: any) {
       if (e.message === 'Cancelled') { ui.toolEnd(id, false, 'Cancelled'); throw e; }
+      if (running) { this.recordEdit(name, opts.model, args, String(e.message ?? e)); }
       await guard?.afterTool?.(req, false, String(e.message ?? e), Date.now() - started, signal)?.catch(() => undefined);
       return finish(false, `ERROR: ${e.message ?? e}`);
     }
+  }
+
+  /** Counts an edit tool's outcome for the local edit statistics (editStats.ts); a no-op for other tools. */
+  private recordEdit(name: string, model: string, args: any, error?: string): void {
+    if (!EDIT_STAT_TOOLS.has(name)) { return; }
+    try { this.deps.editStats?.record({ tool: name, model, path: args?.path, error }); } catch { /* statistics never break a tool call */ }
   }
 }
 

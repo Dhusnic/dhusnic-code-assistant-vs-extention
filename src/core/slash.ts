@@ -28,6 +28,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: 'permissions', description: 'Show the active permission rules and hooks (or `/permissions edit`)', args: '[edit]' },
   { name: 'audit', description: 'Open the log of commands, edits and approvals for this session' },
   { name: 'schedule', description: 'Create and manage scheduled tasks' },
+  { name: 'qa', description: 'Test an app end to end in a real browser: flows, API failures, data correctness, mobile, audit — report saved to test-reports/', args: '<url, feature or what to test>' },
   { name: 'research', description: 'Deep research on the web: parallel researchers, cited report saved to research/', args: '<topic or question>' },
   { name: 'sources', description: 'List every web source used in this session (or `/sources save` to write them to a file)', args: '[save]' },
   { name: 'web', description: 'Web access status, search provider and cache (`/web key`, `/web clear-cache`)', args: '[key|clear-cache]' },
@@ -84,6 +85,31 @@ Work like a careful release engineer:
 7. Verify: service status, the last log lines, and the health check from the notes. Do not finish without verifying.
 8. If verification fails, roll back to the backup, verify again, and report what went wrong.
 Finish with: what was deployed, the version before and after, the verification evidence, and where the backup is.`;
+}
+
+/** The end-to-end QA workflow behind /qa: plan, explore, break it on purpose, check the data, report with evidence. */
+export function qaPrompt(args: string, today = new Date(), reportsFolder = 'test-reports'): string {
+  const date = today.toISOString().slice(0, 10);
+  return `Test this like a senior QA engineer: ${args || '(nothing given: ask me with ask_user_question which app URL or feature to test, and how to log in, then continue)'}
+
+You have a real browser (browser_open, browser_act, browser_read, browser_network, browser_screenshot, browser_audit), failure simulation (browser_simulate), API tests (api_test), data checks (data_compare) and read-only SQL (db_query). Track every step with todo_write.
+
+1. Understand: find the app (README, package.json scripts, routes, API handlers, .env.example) — its URL, how to start it, the main user flows, the APIs each page calls, and any test accounts. If the app is not running, start it with run_command (background) and wait until it answers. If login details are missing, ask me with ask_user_question.
+2. Plan: write a short test plan as a todo list — smoke, main flows, input validation, API failure handling, data correctness, responsive layout, audit. Prefer depth on what changed or what I named.
+3. Smoke test: browser_open each main page. Every page-load failure, JS error, console error, failed or 4xx/5xx API call is a finding.
+4. Flows: drive the real user flows with browser_act (create, edit, delete, search, filter, sort, paginate, log out). After each step check the result on screen AND in browser_network (the right API was called, with the right body, and succeeded).
+5. Negative tests: empty and invalid inputs, boundaries (0, negative, very long text, special characters, emoji), double submit, back button, refresh mid-flow. Errors must be clear and the app must not break.
+6. Failure handling: with browser_simulate make each important API fail (status 500, 401/403, 404, network failure, timeout via delay, empty list "[]", malformed JSON), reload, and check what the user sees — a helpful message and a way to retry, not a blank page, an endless spinner or a JS crash. Try network "offline" and "slow-3g". Clear the simulation afterwards.
+7. Data correctness: compare what the UI shows with the API response (data_compare actual={"page_table": …} expected={"network": "/api/…"}), the API with the database when one is configured (db_query / data_compare with {"db": …}), and with expected files when the repo has them. Check totals, counts, formatting, dates and time zones, sorting and pagination. Use api_test with "rows" rules for required, unique, type and range checks.
+8. API tests: api_test each endpoint you found — happy path, validation errors (400/422), missing or bad auth (401/403), unknown ids (404), response time. Note error responses that leak stack traces or SQL.
+9. Layout and quality: browser_open with device "mobile" and "tablet" on the main pages; browser_audit for performance and accessibility; screenshots of anything broken.
+10. Report: write ${reportsFolder}/${date}-<short-slug>.md with:
+   - Summary: what was tested, environment (URL, browser, data), overall verdict
+   - Results table: area · test · result (✔ pass / ✘ fail / ⚠ warning) · evidence
+   - Bugs, worst first: title, severity (critical/high/medium/low), steps to reproduce, expected vs actual, evidence (failing request id + status + body excerpt, console error, screenshot path), likely cause in the code (file:line) when you can find it
+   - Data mismatches with the exact rows and values
+   - Not tested and why
+   Reply with the summary, the bug list and the report path. Do not fix anything unless I ask; offer to fix the bugs test-first and to turn the checks into automated regression tests in the project's own test framework.`;
 }
 
 /** The deep-research workflow behind /research: plan, parallel researchers, cross-check, cited report on disk. */
@@ -165,6 +191,7 @@ export async function runSlash(p: ParsedSlash, api: SlashApi): Promise<boolean> 
     case 'review': await api.send(REVIEW_PROMPT, '/review'); break;
     case 'fix': await api.send(fixPrompt(p.args), `/fix${p.args ? ` ${p.args}` : ''}`); break;
     case 'deploy': await api.send(deployPrompt(p.args), `/deploy${p.args ? ` ${p.args}` : ''}`); break;
+    case 'qa': await api.send(qaPrompt(p.args), `/qa${p.args ? ` ${p.args}` : ''}`); break;
     case 'research': await api.send(researchPrompt(p.args), `/research${p.args ? ` ${p.args}` : ''}`); break;
     default: return false;
   }

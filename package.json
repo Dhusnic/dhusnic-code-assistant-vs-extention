@@ -2,7 +2,7 @@
     "name": "infraon-code-assistant",
     "displayName": "Infraon Code Assistant",
     "description": "Agentic AI coding assistant powered by the company-hosted LLM",
-    "version": "0.26.0",
+    "version": "0.29.0",
     "publisher": "infraon",
     "engines": {
         "vscode": "^1.90.0"
@@ -46,6 +46,10 @@
             {
                 "command": "infraonAssistant.checkForUpdates",
                 "title": "Infraon Assistant: Check for Updates"
+            },
+            {
+                "command": "infraonAssistant.showEditStats",
+                "title": "Infraon Assistant: Show Edit Statistics"
             },
             {
                 "command": "infraonAssistant.explainSelection",
@@ -111,6 +115,10 @@
             {
                 "command": "infraonAssistant.clearWebCache",
                 "title": "Infraon Assistant: Clear Web Cache and Offline Library"
+            },
+            {
+                "command": "infraonAssistant.setDatabasePassword",
+                "title": "Infraon Assistant: Set Test Database Password"
             },
             {
                 "command": "infraonAssistant.documentSelection",
@@ -227,12 +235,34 @@
                     "infraonAssistant.llmIdleTimeoutSeconds": {
                         "type": "number",
                         "default": 180,
-                        "description": "End an LLM request when the gateway sends nothing for this many seconds (including the wait for the first token, which is long for very large prompts). It is retried automatically when nothing was shown yet. 0 uses the default (180).",
+                        "description": "End an LLM request when the gateway sends nothing for this many seconds (including the wait for the first token, which is long for very large prompts). Such a stall is retried once when nothing was shown yet. 0 uses the default (180).",
+                        "order": 4
+                    },
+                    "infraonAssistant.modelProbeMinutes": {
+                        "type": "number",
+                        "default": 5,
+                        "minimum": 0,
+                        "description": "How often the sidebar's Status line tests the selected model with a one-token request, so a model that no longer answers is shown as \"model not responding\" even while the gateway lists it. The refresh button tests it at once. 0 turns the test off.",
                         "order": 4
                     },
                     "infraonAssistant.temperature": {
                         "type": "number",
                         "default": 0.2,
+                        "markdownDescription": "Sampling temperature. Only used when you set it explicitly: otherwise each model family gets its vendor-recommended sampling (for example Qwen3-Coder: temperature 0.7, top_p 0.8, top_k 20, repetition_penalty 1.05), and unknown models get 0.2. `#infraonAssistant.sampling#` overrides this.",
+                        "order": 5
+                    },
+                    "infraonAssistant.sampling": {
+                        "type": "object",
+                        "default": {},
+                        "markdownDescription": "Override the model's recommended sampling. Set only the fields you want to change; `null` removes the model's value so the gateway's default applies. `top_k` and `repetition_penalty` are left out automatically when the gateway rejects them.",
+                        "properties": {
+                            "temperature": { "type": ["number", "null"], "minimum": 0, "maximum": 2 },
+                            "top_p": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1 },
+                            "top_k": { "type": ["integer", "null"], "minimum": -1 },
+                            "repetition_penalty": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 2 },
+                            "presence_penalty": { "type": ["number", "null"], "minimum": -2, "maximum": 2 }
+                        },
+                        "additionalProperties": false,
                         "order": 5
                     },
                     "infraonAssistant.contextWindow": {
@@ -283,6 +313,22 @@
                         "description": "Max tool-call rounds per request (default 1200, enough to build a mid-size project in one go). 0 uses the effort level's value instead (low 15, medium 50, high 80, max 120).",
                         "order": 0
                     },
+                    "infraonAssistant.selfReview": {
+                        "type": "string",
+                        "enum": ["off", "high", "always"],
+                        "enumDescriptions": ["Never review.", "Review at High and Max effort (default).", "Review at every effort level."],
+                        "default": "high",
+                        "description": "Before finishing a request that changed files, the agent has the model review the diff against the request in a fresh conversation (one extra model call) and fixes what it finds. Runs at most once per request.",
+                        "order": 0
+                    },
+                    "infraonAssistant.planFirst": {
+                        "type": "string",
+                        "enum": ["off", "max", "always"],
+                        "enumDescriptions": ["Never hold edits for a plan.", "At Max effort only (default).", "At every effort level."],
+                        "default": "max",
+                        "description": "Plan before editing: the first time in a request that the agent tries to change a file without having written a task list, that change is held (not run) and the agent is asked to read the files involved and write the plan with todo_write first. Happens at most once per request; questions and read-only work are unaffected; not in plan mode or for sub-agents.",
+                        "order": 0
+                    },
                     "infraonAssistant.autoApprove": {
                         "type": "boolean",
                         "default": false,
@@ -315,6 +361,32 @@
                             "Always use the built-in indexed engine (parallel, .gitignore-aware, source-first)."
                         ],
                         "description": "Engine used by the code-search tool.",
+                        "order": 4
+                    },
+                    "infraonAssistant.embeddingModel": {
+                        "type": "string",
+                        "default": "auto",
+                        "markdownDescription": "Embedding model on the company gateway (`{baseUrl}/embeddings`) used to rank `search_code` results by meaning as well as words (hybrid search). `auto` (default) = the first model listed by the gateway's `/models` whose id contains \"embed\"; when there is none, word ranking only and nothing is sent. Empty = off. Embedding starts only when `search_code` is first used, in capped, paced batches, and only changed code is re-embedded. Code chunks are masked like chat when `redactSecrets` is on; vectors are cached in the extension's storage, never in the workspace.",
+                        "order": 4
+                    },
+                    "infraonAssistant.repoMap.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Give the agents a repo map: a compact overview of the workspace (folders, and the most used files with their main classes and functions) in the system prompt, plus a repo_map tool to see more. Built locally in memory; nothing leaves the machine.",
+                        "order": 4
+                    },
+                    "infraonAssistant.repoMap.maxTokens": {
+                        "type": "number",
+                        "default": 1500,
+                        "minimum": 200,
+                        "maximum": 8000,
+                        "description": "Size of the repo map in the system prompt, in tokens (about 3.5 characters each).",
+                        "order": 4
+                    },
+                    "infraonAssistant.repoMap.useLanguageServer": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Refine the repo map's classes and functions for Java, Kotlin, C#, Go and PHP with the language server's document symbols (only for the files shown in the map, in the background; the built-in patterns are used when no language server answers).",
                         "order": 4
                     },
                     "infraonAssistant.maxConcurrentAgents": {
@@ -363,6 +435,18 @@
                         "default": [],
                         "description": "Commands that check this project after code changes, run in order (for example `npm run lint`, `npm test`). Overrides detection. Leave empty to detect them.",
                         "order": 10
+                    },
+                    "infraonAssistant.checks.relatedTestsFirst": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "When a project check fails and the agent fixes it, check the fix with only the tests related to the changed files first (jest --findRelatedTests, vitest related, the matching pytest or node --test files, the changed Go packages), for faster feedback. The full checks always run before the agent finishes. Off = every fix round runs the full checks.",
+                        "order": 10
+                    },
+                    "infraonAssistant.diagnosticsAfterEdit": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "After the agent edits or writes a file, wait briefly (up to 2 seconds) for the language server and add any new errors in that file to the edit's result, so the agent can fix them right away.",
+                        "order": 11
                     }
                 }
             },
@@ -397,6 +481,22 @@
                         "default": "",
                         "description": "Model for completions. Empty = use the model selected in the chat.",
                         "order": 3
+                    },
+                    "infraonAssistant.inlineCompletions.mode": {
+                        "type": "string",
+                        "enum": [
+                            "auto",
+                            "fim",
+                            "chat"
+                        ],
+                        "enumDescriptions": [
+                            "Fill-in-the-middle through the gateway's /completions endpoint for code models known to support it (Qwen-Coder, DeepSeek-Coder, StarCoder, Code Llama), otherwise the chat prompt. Falls back to chat for the session if the gateway rejects FIM.",
+                            "Always fill-in-the-middle through /completions (Qwen-Coder tokens for unknown models). No fallback.",
+                            "Always the chat prompt through /chat/completions."
+                        ],
+                        "default": "auto",
+                        "description": "How suggestions are requested from the model.",
+                        "order": 4
                     }
                 }
             },
@@ -665,9 +765,116 @@
                 }
             },
             {
+                "id": "infraonAssistant.testing",
+                "title": "Testing",
+                "order": 6,
+                "properties": {
+                    "infraonAssistant.testing.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Give the agents testing tools: a real browser (Chrome/Edge) to open and drive web apps and catch load failures, JavaScript errors and failed API calls; failure simulation; API tests; data comparison; and read-only database queries.",
+                        "order": 0
+                    },
+                    "infraonAssistant.testing.browserPath": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Chrome, Edge or Chromium executable for browser tests. Empty: the installed Chrome or Edge is found automatically.",
+                        "order": 1
+                    },
+                    "infraonAssistant.testing.headless": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Run the test browser without a window. Turn off to watch the agent use the browser.",
+                        "order": 2
+                    },
+                    "infraonAssistant.testing.timeoutSeconds": {
+                        "type": "number",
+                        "default": 30,
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Default timeout for page loads and API test requests.",
+                        "order": 3
+                    },
+                    "infraonAssistant.testing.slowRequestMs": {
+                        "type": "number",
+                        "default": 3000,
+                        "minimum": 100,
+                        "description": "Requests slower than this are reported as slow.",
+                        "order": 4
+                    },
+                    "infraonAssistant.testing.ignoreHttpsErrors": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Accept invalid or self-signed TLS certificates in browser and API tests (internal test servers only).",
+                        "order": 5
+                    },
+                    "infraonAssistant.testing.browserIdleMinutes": {
+                        "type": "number",
+                        "default": 10,
+                        "minimum": 1,
+                        "description": "Close a test browser after it has not been used for this many minutes.",
+                        "order": 6
+                    },
+                    "infraonAssistant.testing.reportsFolder": {
+                        "type": "string",
+                        "default": "test-reports",
+                        "description": "Workspace folder for /qa test reports and screenshots.",
+                        "order": 7
+                    },
+                    "infraonAssistant.testing.databases": {
+                        "type": "array",
+                        "default": [],
+                        "markdownDescription": "Databases the agents may query **read-only** (for data checks). Each: `name`, `type` (`postgres`, `mysql`, `sqlite`, `sqlserver`), `host`, `port`, `database`, `user` (or `file` for SQLite), optional `cli` (path to psql/mysql/sqlite3/sqlcmd) and `description`. Set passwords with **Infraon Assistant: Set Test Database Password** (stored encrypted). Use a read-only database user.",
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "name",
+                                "type"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string"
+                                },
+                                "type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "postgres",
+                                        "mysql",
+                                        "sqlite",
+                                        "sqlserver"
+                                    ]
+                                },
+                                "host": {
+                                    "type": "string"
+                                },
+                                "port": {
+                                    "type": "number"
+                                },
+                                "database": {
+                                    "type": "string"
+                                },
+                                "user": {
+                                    "type": "string"
+                                },
+                                "file": {
+                                    "type": "string"
+                                },
+                                "cli": {
+                                    "type": "string"
+                                },
+                                "description": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "order": 8
+                    }
+                }
+            },
+            {
                 "id": "infraonAssistant.updates",
                 "title": "Updates",
-                "order": 6,
+                "order": 7,
                 "properties": {
                     "infraonAssistant.autoUpdate": {
                         "type": "boolean",
@@ -723,6 +930,7 @@
         "typecheck": "tsc -p . --noEmit",
         "test": "tsc -p . && node --test \"out/test/*.test.js\" && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
         "test:unit": "tsc -p . && node --test \"out/test/*.test.js\"",
+        "test:live": "tsc -p . && node --test --test-concurrency=1 \"out/test/live/*.test.js\"",
         "test:slow": "tsc -p . && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
         "test:coverage": "tsc -p . && node --test --experimental-test-coverage --test-coverage-include=\"out/core/**\" --test-coverage-include=\"out/host/**\" \"out/test/*.test.js\"",
         "test:e2e": "npm run compile && node out/e2e/run.js",

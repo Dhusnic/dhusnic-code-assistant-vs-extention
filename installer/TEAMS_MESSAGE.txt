@@ -1,12 +1,15 @@
 Hi team 👋
 
-Infraon Code Assistant 0.26.0 is out, and from now on it updates itself 🚀
+Infraon Code Assistant 0.29.0 is out: more reliable, and it checks its own work better 🎯
 
 🆕 What's new
-• Automatic updates: this is the last time you install an update by hand. New versions now install by themselves from our gateway server, and you just click "Reload Now" when asked
-• The reload prompt waits until your agents finish, so nothing gets interrupted
-• Want to check now? Ctrl+Shift+P (Mac: Cmd+Shift+P) → "Infraon Assistant: Check for Updates"
-• Every update is signed and verified before it's installed
+• You can see what it's doing: "Waiting for the model… 45 s" when the server is slow, "Writing index.html… 14 KB" while it writes a file
+• Sidebar Status now checks the model really answers, and a stuck server shows a clear message instead of minutes of "Thinking…"
+• At Max effort it writes a task list before changing files, so big tasks are finished properly
+• Type-checks sub-projects too (e.g. client/ and server/), and test runners like vitest no longer hang
+• Faster fix rounds: related tests first, full test suite before it finishes
+• Better inline code completions, and a smarter project map for Java, C#, Go, Kotlin and PHP
+• Already on 0.26.0 or later? You don't need the installer: the update installs by itself, just click "Reload Now" when asked (or Ctrl+Shift+P → "Infraon Assistant: Check for Updates")
 
 ⬇️ Download (office network / VPN only)
 • Windows: https://172.16.48.75:30400/infraon-assistant/downloads/InfraonCodeAssistant-Installer.zip

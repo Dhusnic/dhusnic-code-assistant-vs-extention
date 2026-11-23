@@ -1,0 +1,10 @@
+{
+    "name": "api-options-object",
+    "prompt": "Change fetchUsers in src/api/users.js to take an options object instead of positional arguments: fetchUsers(client, { page = 1, pageSize = 50, includeInactive = false, role }). When role is given, send it to the server as the `role` query parameter. Update every caller in the project. exportAdmins should now let the server filter by role 'admin' instead of filtering the users itself. Behaviour must otherwise stay the same.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["api-change", "multi-file", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

@@ -1,6 +1,17 @@
+/**
+ * The OpenAI-compatible LLM client: one streaming /chat/completions call (streamChatOnce) with an idle timeout, the
+ * model list, and withRetry for transient gateway failures. Every model call goes through the LlmFn signature, so
+ * wrappers (retry, sampling fallback, usage counting, secret masking) stack in any order and must pass the optional
+ * callbacks (onToolProgress, onEvent) through unchanged.
+ *
+ * A stall (the gateway accepted the request but sent nothing for the idle timeout) is retried at most once: a backend
+ * that is stuck stays stuck, and three 180 s retries left users looking at "Thinking…" for twelve minutes. Retries are
+ * reported through onEvent so the chat can say what is happening.
+ */
 import * as https from 'https';
 import * as http from 'http';
 import { URL } from 'url';
+import { SamplingExtras, samplingBody, withSamplingFallback } from './sampling';
 
 export interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 export interface ChatMessage {
@@ -17,6 +28,8 @@ export interface LlmConfig {
   baseUrl: string; apiKey: string; model: string; temperature: number; maxTokens?: number; allowSelfSigned: boolean;
   /** End the request when the gateway sends nothing for this long (waiting for the first token included). Default 180 s. */
   idleTimeoutMs?: number;
+  /** Sampling besides temperature (top_p, top_k, ...), chosen per model family in sampling.ts. Sent only when defined. */
+  sampling?: SamplingExtras;
 }
 
 export const DEFAULT_IDLE_TIMEOUT_MS = 180_000;
@@ -26,15 +39,44 @@ export interface StreamResult {
   /** Why the model stopped: "stop", "tool_calls", or "length" when it hit the output-token limit. */
   finishReason?: string;
 }
+/**
+ * A tool call the model is still writing. A large write_file streams for minutes with no visible text, so the
+ * agent's status line shows this instead of "Thinking…". `path` is read from the partial arguments once it is complete.
+ */
+export interface ToolCallProgress { index: number; name: string; chars: number; path?: string }
+/**
+ * What happens to a model call besides its content: `receiving` once the first bytes of the reply arrive (the model is
+ * working, even if it only reasons at first), `retry` before a failed attempt is sent again, with a line for the user.
+ */
+export type LlmEvent =
+  | { type: 'receiving' }
+  | { type: 'retry'; attempt: number; of: number; delayMs: number; message: string };
+/**
+ * Wrappers must pass `onToolProgress` and `onEvent` through unchanged; both are optional, so callers that ignore
+ * them still work.
+ */
 export type LlmFn = (
   cfg: LlmConfig, messages: ChatMessage[], tools: ToolSpec[], onToken: (t: string) => void, signal: AbortSignal,
+  onToolProgress?: (p: ToolCallProgress) => void, onEvent?: (e: LlmEvent) => void,
 ) => Promise<StreamResult>;
 
-function endpoint(cfg: LlmConfig, suffix: string): URL {
+/** Minimum time between two progress reports for one stream, so the UI is not flooded with updates. */
+export const TOOL_PROGRESS_INTERVAL_MS = 250;
+const PATH_ARG = /"(?:path|file_path|filePath|filename)"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+
+/** Progress for a partly streamed tool call. The path is taken only once its JSON string has closed. */
+export function toolCallProgress(index: number, call: ToolCall): ToolCallProgress {
+  const m = PATH_ARG.exec(call.function.arguments);
+  let path: string | undefined;
+  if (m) { try { path = JSON.parse(`"${m[1]}"`); } catch { path = m[1]; } }
+  return { index, name: call.function.name, chars: call.function.arguments.length, ...(path ? { path } : {}) };
+}
+
+export function endpoint(cfg: LlmConfig, suffix: string): URL {
   return new URL(`${cfg.baseUrl.replace(/\/+$/, '')}${suffix}`);
 }
 
-function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen: number): https.RequestOptions {
+export function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen: number): https.RequestOptions {
   const isHttps = url.protocol === 'https:';
   return {
     method, hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname + url.search,
@@ -49,7 +91,7 @@ function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen: numbe
 export const stripUiFields = (messages: ChatMessage[]): Omit<ChatMessage, 'display'>[] =>
   messages.map(({ display: _display, ...m }) => m);
 
-export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
+export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => {
   const url = endpoint(cfg, '/chat/completions');
   const payload: Record<string, unknown> = {
     model: cfg.model, messages: stripUiFields(messages), temperature: cfg.temperature, stream: true,
@@ -57,6 +99,7 @@ export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => 
   };
   if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
   if (cfg.maxTokens) { payload.max_tokens = cfg.maxTokens; }
+  Object.assign(payload, samplingBody(cfg.sampling));
   const body = JSON.stringify(payload);
   const lib = url.protocol === 'https:' ? https : http;
 
@@ -92,9 +135,16 @@ export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => 
       let usage: TokenUsage | undefined;
       let finishReason: string | undefined;
       const calls: Record<number, ToolCall> = {};
+      let lastProgress = 0;
+      let lastProgressKey = '';
       let buf = '';
+      let receiving = false;
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => {
+        if (!receiving) {
+          receiving = true;
+          try { onEvent?.({ type: 'receiving' }); } catch { /* a UI error must not break the stream */ }
+        }
         buf += chunk;
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
@@ -116,6 +166,16 @@ export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => 
               if (tc.id) { cur.id = tc.id; }
               if (tc.function?.name) { cur.function.name += tc.function.name; }
               if (tc.function?.arguments) { cur.function.arguments += tc.function.arguments; }
+              if (onToolProgress && cur.function.name) {
+                // Report at once when the call or its path changes, otherwise at most every TOOL_PROGRESS_INTERVAL_MS.
+                const p = toolCallProgress(i, cur);
+                const key = `${i}|${p.name}|${p.path ?? ''}`;
+                const now = Date.now();
+                if (key !== lastProgressKey || now - lastProgress >= TOOL_PROGRESS_INTERVAL_MS) {
+                  lastProgressKey = key; lastProgress = now;
+                  try { onToolProgress(p); } catch { /* a UI error must not break the stream */ }
+                }
+              }
             }
           } catch { /* partial or keep-alive line */ }
         }
@@ -161,27 +221,114 @@ export const isTransientError = (e: unknown): boolean => {
   return /LLM HTTP (429|502|503|504)\b/.test(m) || /ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|ECONNREFUSED/.test(m);
 };
 
+/** The idle timeout of streamChatOnce fired: the gateway accepted the request (or started a reply) and went silent. */
+export const isStallError = (e: unknown): boolean => /LLM stream stalled/.test(e instanceof Error ? e.message : String(e));
+
+/** The chat line shown before a retry, e.g. "The gateway is not responding; retrying (2/3)…". */
+export function retryNotice(e: unknown, attempt: number, of: number): string {
+  const m = e instanceof Error ? e.message : String(e);
+  const n = `retrying (${attempt}/${of})…`;
+  if (isStallError(e)) {
+    const s = /for (\d+) s/.exec(m);
+    return `The model is not responding${s ? ` (nothing received for ${s[1]} s)` : ''}; ${n}`;
+  }
+  const code = /LLM HTTP (\d{3})/.exec(m)?.[1];
+  if (code === '429') { return `The gateway is busy (HTTP 429); ${n}`; }
+  if (code) { return `The gateway returned HTTP ${code}; ${n}`; }
+  return `The gateway is not responding; ${n}`;
+}
+
 /**
- * Retries transient gateway failures (502/503/504/429, resets) with exponential backoff. It only retries
- * while nothing has been streamed to the user yet, so output is never duplicated.
+ * Retries transient gateway failures (502/503/504/429, resets) with exponential backoff, and a stall at most
+ * `stallRetries` times (default 1): a stuck backend rarely recovers within one idle timeout, let alone three. It
+ * only retries while nothing has been streamed to the user yet, so output is never duplicated. Each retry is
+ * announced through onEvent before the backoff.
  */
-export function withRetry(fn: LlmFn, opts: { retries?: number; baseDelayMs?: number } = {}): LlmFn {
+export function withRetry(fn: LlmFn, opts: { retries?: number; stallRetries?: number; baseDelayMs?: number } = {}): LlmFn {
   const retries = opts.retries ?? 3;
+  const stallRetries = Math.min(opts.stallRetries ?? 1, retries);
   const base = opts.baseDelayMs ?? 800;
-  return async (cfg, messages, tools, onToken, signal) => {
+  return async (cfg, messages, tools, onToken, signal, onToolProgress, onEvent) => {
+    let stalls = 0;
     for (let attempt = 0; ; attempt++) {
       let emitted = false;
       try {
-        return await fn(cfg, messages, tools, (t) => { emitted = true; onToken(t); }, signal);
+        return await fn(cfg, messages, tools, (t) => { emitted = true; onToken(t); }, signal, onToolProgress, onEvent);
       } catch (e) {
         if (signal.aborted || emitted || attempt >= retries || !isTransientError(e)) { throw e; }
+        const stall = isStallError(e);
+        if (stall && stalls >= stallRetries) { throw e; }
+        if (stall) { stalls++; }
+        const delayMs = base * 2 ** attempt;
+        const [n, of] = stall ? [stalls, stallRetries] : [attempt + 1, retries];
+        try { onEvent?.({ type: 'retry', attempt: n, of, delayMs, message: retryNotice(e, n, of) }); } catch { /* UI only */ }
         await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, base * 2 ** attempt);
-          signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Cancelled')); }, { once: true });
+          const onAbort = () => { clearTimeout(timer); reject(new Error('Cancelled')); };
+          const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, delayMs);
+          signal.addEventListener('abort', onAbort, { once: true });
         });
       }
     }
   };
 }
 
-export const streamChat: LlmFn = withRetry(streamChatOnce);
+/** Retries transient failures, and once without the non-standard sampling fields when the gateway rejects them. */
+export const streamChat: LlmFn = withRetry(withSamplingFallback(streamChatOnce));
+
+/** A raw (non-chat) text completion: the prompt is sent as-is, so fill-in-the-middle tokens reach the model. */
+export interface TextCompletionRequest { prompt: string; stop?: string[]; maxTokens?: number; temperature?: number }
+export type TextCompleteFn = (cfg: LlmConfig, req: TextCompletionRequest, signal: AbortSignal) => Promise<string>;
+
+/** Inline completions are short; a gateway that has not answered in this long will not answer usefully. */
+export const TEXT_COMPLETION_TIMEOUT_MS = 30_000;
+const MAX_TEXT_RESPONSE = 1_000_000;
+
+/**
+ * POST {baseUrl}/completions (the OpenAI legacy completions endpoint, which vLLM, llama.cpp, SGLang and LiteLLM
+ * serve) without streaming, and return choices[0].text. Errors use the same `LLM HTTP <status>: <body>` shape as
+ * streamChatOnce, so callers can tell "endpoint not supported" (404/400/...) from transient failures. No retries:
+ * an inline completion that fails is simply not shown.
+ */
+export const completeText: TextCompleteFn = (cfg, req, signal) => {
+  const url = endpoint(cfg, '/completions');
+  const payload: Record<string, unknown> = {
+    model: cfg.model, prompt: req.prompt, temperature: req.temperature ?? cfg.temperature, stream: false,
+    max_tokens: req.maxTokens ?? cfg.maxTokens ?? 128,
+  };
+  if (req.stop?.length) { payload.stop = req.stop; }
+  const body = JSON.stringify(payload);
+  const lib = url.protocol === 'https:' ? https : http;
+  return new Promise<string>((outerResolve, outerReject) => {
+    if (signal.aborted) { outerReject(new Error('Cancelled')); return; }
+    let settled = false;
+    const timeoutMs = cfg.idleTimeoutMs && cfg.idleTimeoutMs > 0 ? Math.min(cfg.idleTimeoutMs, TEXT_COMPLETION_TIMEOUT_MS) : TEXT_COMPLETION_TIMEOUT_MS;
+    const done = () => { settled = true; clearTimeout(timer); signal.removeEventListener('abort', onAbort); };
+    const resolve = (r: string) => { if (!settled) { done(); outerResolve(r); } };
+    const reject = (e: Error) => { if (!settled) { done(); outerReject(e); } };
+    const onAbort = () => { req2.destroy(); reject(new Error('Cancelled')); };
+    const timer = setTimeout(() => {
+      const err = new Error(`LLM completion timed out after ${Math.round(timeoutMs / 1000)} s (ETIMEDOUT).`);
+      reject(err); req2.destroy(err);
+    }, timeoutMs);
+    const req2 = lib.request(requestOptions(cfg, url, 'POST', Buffer.byteLength(body)), (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (d: string) => { if (data.length < MAX_TEXT_RESPONSE) { data += d; } });
+      res.on('end', () => {
+        if ((res.statusCode ?? 500) >= 400) { reject(new Error(`LLM HTTP ${res.statusCode}: ${data.slice(0, 500)}`)); return; }
+        try {
+          const obj = JSON.parse(data);
+          const text = obj?.choices?.[0]?.text;
+          if (typeof text !== 'string') { reject(new Error('LLM HTTP 200 without choices[0].text: completions not supported')); return; }
+          resolve(text);
+        } catch { reject(new Error(`LLM completion: invalid JSON response: ${data.slice(0, 200)}`)); }
+      });
+      res.on('error', reject);
+      res.on('aborted', () => reject(new Error('LLM completion ended early (ECONNRESET).')));
+    });
+    req2.on('error', reject);
+    signal.addEventListener('abort', onAbort, { once: true });
+    req2.write(body);
+    req2.end();
+  });
+};

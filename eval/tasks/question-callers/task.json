@@ -1,0 +1,11 @@
+{
+    "name": "question-callers",
+    "prompt": "Question before we change the payment gateway (no code change needed): which source files under src/ call chargeCard from src/payments/gateway.js directly, meaning they invoke that function itself (under any local name), not through another function that calls it? Write the answer into a new file ANSWER.txt at the project root: one path per line, relative to the project root, like src/foo/bar.js. Do not modify any other file.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "mustNotChange": ["src/**", "test/**"],
+    "timeoutSeconds": 600,
+    "tags": ["question", "search"],
+    "difficulty": "medium",
+    "language": "javascript"
+}

@@ -1,0 +1,10 @@
+{
+    "name": "event-bus-once",
+    "prompt": "Add a once(event, listener) method to the EventBus in src/bus.js: the listener runs for the next emit of that event only, receives the same arguments as on() listeners, and once() returns an unsubscribe function like on() does. off(event, listener) with the original listener must also remove a pending once listener.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["feature", "hidden-tests"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

@@ -201,6 +201,8 @@ test('progress is saved during a long run; a crash mid-run reopens as "interrupt
   }, { storeDir });
   const s = h.mgr.newSession();
   const run = h.mgr.send(s.id, 'a1', 'long task');
+  // Wait for the tool round itself (not a fixed time, which flakes under load), then for the throttled save (20 ms).
+  for (let i = 0; i < 100 && !h.mgr.agent(s.id, 'a1').agent.history.some((m) => m.role === 'tool'); i++) { await sleep(20); }
   await sleep(150);
   const h2 = await harness(slowEcho, { storeDir });
   const re = (await h2.mgr.open(s.id))!;

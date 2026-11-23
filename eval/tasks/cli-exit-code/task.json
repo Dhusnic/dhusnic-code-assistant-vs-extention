@@ -1,0 +1,10 @@
+{
+    "name": "cli-exit-code",
+    "prompt": "Our CI pipeline runs `node bin/validate-config.js <file>` but it never fails the build, because the script always exits with code 0. Fix the CLI: print \"OK\" to stdout and exit 0 when the file is valid; when the file's content is invalid (not JSON, or validate() reports problems) print each problem to stderr and exit 1; when the argument is missing or the file can't be read, print a usage or read error to stderr and exit 2. Nothing should be printed to stdout in the error cases.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "config", "cli", "hidden-tests"],
+    "difficulty": "easy",
+    "language": "javascript"
+}

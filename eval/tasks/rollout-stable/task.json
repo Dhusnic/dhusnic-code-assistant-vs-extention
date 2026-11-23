@@ -1,0 +1,10 @@
+{
+    "name": "rollout-stable",
+    "prompt": "Users see the newCheckout feature switch on and off between page loads. Percentage rollouts must be stable per user: in the feature-flag code, decide with the project's existing string hash helper (find it; don't write a new hash) and enable a flag for a user when hash(`${flagName}:${userId}`) % 100 is less than the flag's rollout percentage. 0 % means never and 100 % means always. Don't use randomness.",
+    "check": "node __grade__.js",
+    "hiddenTests": "hidden",
+    "timeoutSeconds": 600,
+    "tags": ["bugfix", "search", "hidden-tests"],
+    "difficulty": "medium",
+    "language": "javascript"
+}
