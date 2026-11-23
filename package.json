@@ -48,6 +48,10 @@
                 "title": "Infraon Assistant: Check for Updates"
             },
             {
+                "command": "infraonAssistant.showEditStats",
+                "title": "Infraon Assistant: Show Edit Statistics"
+            },
+            {
                 "command": "infraonAssistant.explainSelection",
                 "title": "Infraon Assistant: Explain Selection"
             },
@@ -346,8 +350,8 @@
                     },
                     "infraonAssistant.embeddingModel": {
                         "type": "string",
-                        "default": "",
-                        "markdownDescription": "Embedding model on the company gateway (`{baseUrl}/embeddings`) used to rank `search_code` results by meaning as well as words (hybrid search). Empty = off: word ranking only, nothing is sent. `auto` = the first model listed by the gateway whose id contains \"embed\". Code chunks are masked like chat when `redactSecrets` is on; vectors are cached in the extension's storage, never in the workspace.",
+                        "default": "auto",
+                        "markdownDescription": "Embedding model on the company gateway (`{baseUrl}/embeddings`) used to rank `search_code` results by meaning as well as words (hybrid search). `auto` (default) = the first model listed by the gateway's `/models` whose id contains \"embed\"; when there is none, word ranking only and nothing is sent. Empty = off. Embedding starts only when `search_code` is first used, in capped, paced batches, and only changed code is re-embedded. Code chunks are masked like chat when `redactSecrets` is on; vectors are cached in the extension's storage, never in the workspace.",
                         "order": 4
                     },
                     "infraonAssistant.repoMap.enabled": {

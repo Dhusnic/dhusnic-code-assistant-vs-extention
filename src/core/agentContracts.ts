@@ -14,6 +14,7 @@ import type { FileChangeFeed } from './changeJournal';
 import type { CheckCommand } from './checks';
 import type { EditDiagnostics } from './editDiagnostics';
 import type { SelfReviewSetting } from './selfReview';
+import type { EditOutcome } from './editStats';
 
 export interface ApprovalRequest {
   id: string;
@@ -118,6 +119,8 @@ export interface AgentDeps {
   original?: (turn: number, absPath: string) => Promise<{ existed: boolean; data?: Buffer } | undefined>;
   /** Repo map section for the system prompt (repoMap.ts), fetched once per turn; '' when off or not built yet. */
   repoMap?: () => Promise<string> | string;
+  /** Local counters of edit tool outcomes (editStats.ts): tool, model, extension and reason code only. */
+  editStats?: { record(o: EditOutcome): void };
 }
 
 export interface SpawnRequest {

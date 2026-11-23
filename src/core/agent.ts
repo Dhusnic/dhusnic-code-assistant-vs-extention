@@ -24,6 +24,7 @@ import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, attachWorkingState, com
 import * as path from 'path';
 import { FileReadTracker, resolveIn } from './fstools';
 import { LoopGuard, withNudge } from './loopGuard';
+import { EDIT_STAT_TOOLS } from './editStats';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
 import { selfReview, shouldSelfReview } from './selfReview';
 import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, sameDigest, scopeChecks } from './checks';
@@ -837,9 +838,10 @@ export class Agent {
 
     if (!allowed) { return finish(false, `ERROR: ${name} is not allowed in ${opts.mode} mode.`); }
     if (restoreError) { return finish(false, `ERROR: ${restoreError}`); }
-    if (previewError) { return finish(false, `ERROR: ${previewError}`); }
+    if (previewError) { this.recordEdit(name, opts.model, args, previewError); return finish(false, `ERROR: ${previewError}`); }
     const req: ToolRequest = { tool: name, kind: tool.kind, args, root: this.deps.root, mode: opts.mode };
     const started = Date.now();
+    let running = false;
     try {
       // Deny rules are checked first and cannot be overridden by the mode, a hook or an approval.
       let verdict = await this.judge(req);
@@ -860,15 +862,24 @@ export class Agent {
         guard?.onApproval?.(req, out === true ? 'allowed' : 'denied');
         if (out !== true) { return finish(false, out); }
       }
+      running = true;
       const result = await tool.run(args, ctx);
+      this.recordEdit(name, opts.model, args);
       const post = await guard?.afterTool?.(req, true, result, Date.now() - started, signal);
       const notes = [...(post?.context ?? []), ...(post?.blocked ? [`A PostToolUse hook reported a problem: ${post.reason ?? 'no reason given'}`] : [])];
       return finish(true, notes.length ? `${result}\n\n${notes.join('\n')}` : result);
     } catch (e: any) {
       if (e.message === 'Cancelled') { ui.toolEnd(id, false, 'Cancelled'); throw e; }
+      if (running) { this.recordEdit(name, opts.model, args, String(e.message ?? e)); }
       await guard?.afterTool?.(req, false, String(e.message ?? e), Date.now() - started, signal)?.catch(() => undefined);
       return finish(false, `ERROR: ${e.message ?? e}`);
     }
+  }
+
+  /** Counts an edit tool's outcome for the local edit statistics (editStats.ts); a no-op for other tools. */
+  private recordEdit(name: string, model: string, args: any, error?: string): void {
+    if (!EDIT_STAT_TOOLS.has(name)) { return; }
+    try { this.deps.editStats?.record({ tool: name, model, path: args?.path, error }); } catch { /* statistics never break a tool call */ }
   }
 }
 

@@ -40,7 +40,8 @@ Open the folder in VS Code and press **F5** (*Run Extension*). The launch config
 
 ## Releasing
 
-1. Bump nothing by hand. `deploy.ps1 -Version x.y.z` sets the version, runs the type check, packages the extension (`vscode:prepublish` builds the production bundle) and installs it locally.
+1. Bump nothing by hand. `deploy.ps1 -Version x.y.z` sets the version, runs the type check and the tests, packages the extension (`vscode:prepublish` builds the production bundle) and installs it locally.
+   - Live gateway check: set `INFRAON_LIVE_API_KEY` (and optionally `INFRAON_LIVE_BASE_URL` / `INFRAON_LIVE_MODEL`) before running it, and `deploy.ps1` also runs `npm run test:live` against the real gateway; a failure stops the release. Without the key the check is skipped with a warning. The key is never printed.
 2. With `-Publish`, it also signs the package and uploads it to the update server. Installed copies then update themselves. See [server/updates/README.md](server/updates/README.md).
 3. `node scripts/build-installers.js` builds the first-install zips from the committed tree. Upload them to the gateway's `downloads/` folder. They aren't stored in git.
 

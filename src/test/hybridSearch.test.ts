@@ -45,7 +45,7 @@ function fakeEmbedder(model = 'toy-embed'): Embedder & { calls: string[][] } {
 }
 
 const ranker = (root: string, emb: Embedder | (() => Promise<Embedder | undefined>), o: Partial<HybridOptions> = {}) =>
-  new HybridRanker(root, { embedder: typeof emb === 'function' ? emb : async () => emb, ...o });
+  new HybridRanker(root, { embedder: typeof emb === 'function' ? emb : async () => emb, groupPauseMs: 0, ...o });
 
 /* ------------------------------------------------------------------ pure helpers */
 
@@ -261,4 +261,54 @@ test('hybrid: vectors persist in the storage folder and are reused after a resta
   const other = fakeEmbedder('other-embed');
   await new CodeIndex(root, undefined, ranker(root, other, { storeDir: store })).search('login');
   assert.equal(other.calls[0].length, 3, 'a different model does not reuse the old vectors');
+});
+
+/* ------------------------------------------------------------------ default "auto" */
+
+test('auto default: with only a chat model listed, search_code stays BM25 and nothing is requested, query after query', async () => {
+  const root = await repo({ 'src/auth/users.ts': AUTH, 'src/net/http.ts': HTTP });
+  const emb = fakeEmbedder();
+  let lookups = 0;
+  const r = ranker(root, async () => { lookups++; const m = resolveEmbeddingModel('auto', ['qwen3-coder-next']); return m ? { ...emb, model: m } : undefined; });
+  const idx = new CodeIndex(root, undefined, r);
+  for (const q of ['login', 'retry request', 'authenticate']) {
+    const hits = await idx.search(q);
+    assert.ok(hits.every((h) => !h.hybrid), 'word ranking only');
+  }
+  await r.idle();
+  assert.equal(lookups, 3, 'the decision is a lookup in the already fetched list on each query');
+  assert.deepEqual(emb.calls, [], 'no embeddings request at all');
+  assert.equal(r.size, 0);
+});
+
+test('auto default: package.json default is "auto" and the description says what happens without an embedding model', async () => {
+  const pkg = JSON.parse(await fs.readFile(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+  const prop = ([] as any[]).concat(pkg.contributes.configuration).map((c) => c?.properties?.['infraonAssistant.embeddingModel']).find(Boolean);
+  assert.equal(prop.default, 'auto');
+  assert.match(prop.markdownDescription, /nothing is sent/);
+});
+
+test('hybrid: background groups are paced, and dispose stops the run during a pause', async () => {
+  const files: Record<string, string> = {};
+  for (let i = 0; i < 12; i++) { files[`src/m${i}.ts`] = `export function helper${i}(x: number) { return x * ${i}; }\n`; }
+  const root = await repo(files);
+  const emb = fakeEmbedder();
+  const stamps: number[] = [];
+  const timed: Embedder = { model: emb.model, embed: async (inputs, s) => { stamps.push(Date.now()); return emb.embed(inputs, s); } };
+  const r = ranker(root, timed, { smallIndex: 0, immediate: 1, groupSize: 3, maxChunks: 9, groupPauseMs: 80 });
+  await new CodeIndex(root, undefined, r).search('helper');
+  await r.idle();
+  const bg = stamps.slice(1);
+  assert.ok(bg.length >= 2, 'several background groups');
+  for (let i = 1; i < bg.length; i++) { assert.ok(bg[i] - bg[i - 1] >= 70, `group ${i} waited for the pause`); }
+
+  const emb2 = fakeEmbedder();
+  const r2 = ranker(root, emb2, { smallIndex: 0, immediate: 1, groupSize: 3, maxChunks: 9, groupPauseMs: 60_000 });
+  await new CodeIndex(root, undefined, r2).search('helper');
+  await new Promise((res) => setTimeout(res, 50));
+  const t0 = Date.now();
+  r2.dispose();
+  await r2.idle();
+  assert.ok(Date.now() - t0 < 1000, 'dispose ends the pause at once');
+  assert.equal(emb2.calls.length, 2, 'the query request and one background group, then the pause was cut short');
 });
