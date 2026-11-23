@@ -2,7 +2,7 @@
     "name": "infraon-code-assistant",
     "displayName": "Infraon Code Assistant",
     "description": "Agentic AI coding assistant powered by the company-hosted LLM",
-    "version": "0.30.0",
+    "version": "0.31.0",
     "publisher": "infraon",
     "engines": {
         "vscode": "^1.90.0"
@@ -260,11 +260,45 @@
                         "default": {},
                         "markdownDescription": "Override the model's recommended sampling. Set only the fields you want to change; `null` removes the model's value so the gateway's default applies. `top_k` and `repetition_penalty` are left out automatically when the gateway rejects them.",
                         "properties": {
-                            "temperature": { "type": ["number", "null"], "minimum": 0, "maximum": 2 },
-                            "top_p": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1 },
-                            "top_k": { "type": ["integer", "null"], "minimum": -1 },
-                            "repetition_penalty": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 2 },
-                            "presence_penalty": { "type": ["number", "null"], "minimum": -2, "maximum": 2 }
+                            "temperature": {
+                                "type": [
+                                    "number",
+                                    "null"
+                                ],
+                                "minimum": 0,
+                                "maximum": 2
+                            },
+                            "top_p": {
+                                "type": [
+                                    "number",
+                                    "null"
+                                ],
+                                "exclusiveMinimum": 0,
+                                "maximum": 1
+                            },
+                            "top_k": {
+                                "type": [
+                                    "integer",
+                                    "null"
+                                ],
+                                "minimum": -1
+                            },
+                            "repetition_penalty": {
+                                "type": [
+                                    "number",
+                                    "null"
+                                ],
+                                "exclusiveMinimum": 0,
+                                "maximum": 2
+                            },
+                            "presence_penalty": {
+                                "type": [
+                                    "number",
+                                    "null"
+                                ],
+                                "minimum": -2,
+                                "maximum": 2
+                            }
                         },
                         "additionalProperties": false,
                         "order": 5
@@ -319,16 +353,32 @@
                     },
                     "infraonAssistant.selfReview": {
                         "type": "string",
-                        "enum": ["off", "high", "always"],
-                        "enumDescriptions": ["Never review.", "Review at High and Max effort (default).", "Review at every effort level."],
+                        "enum": [
+                            "off",
+                            "high",
+                            "always"
+                        ],
+                        "enumDescriptions": [
+                            "Never review.",
+                            "Review at High and Max effort (default).",
+                            "Review at every effort level."
+                        ],
                         "default": "high",
                         "description": "Before finishing a request that changed files, the agent has the model review the diff against the request in a fresh conversation (one extra model call) and fixes what it finds. Runs at most once per request.",
                         "order": 0
                     },
                     "infraonAssistant.planFirst": {
                         "type": "string",
-                        "enum": ["off", "max", "always"],
-                        "enumDescriptions": ["Never hold edits for a plan.", "At Max effort only (default).", "At every effort level."],
+                        "enum": [
+                            "off",
+                            "max",
+                            "always"
+                        ],
+                        "enumDescriptions": [
+                            "Never hold edits for a plan.",
+                            "At Max effort only (default).",
+                            "At every effort level."
+                        ],
                         "default": "max",
                         "description": "Plan before editing: the first time in a request that the agent tries to change a file without having written a task list, that change is held (not run) and the agent is asked to read the files involved and write the plan with todo_write first. Happens at most once per request; questions and read-only work are unaffected; not in plan mode or for sub-agents.",
                         "order": 0
