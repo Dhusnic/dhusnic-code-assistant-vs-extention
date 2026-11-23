@@ -1,6 +1,7 @@
 import * as https from 'https';
 import * as http from 'http';
 import { URL } from 'url';
+import { SamplingExtras, samplingBody, withSamplingFallback } from './sampling';
 
 export interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 export interface ChatMessage {
@@ -17,6 +18,8 @@ export interface LlmConfig {
   baseUrl: string; apiKey: string; model: string; temperature: number; maxTokens?: number; allowSelfSigned: boolean;
   /** End the request when the gateway sends nothing for this long (waiting for the first token included). Default 180 s. */
   idleTimeoutMs?: number;
+  /** Sampling besides temperature (top_p, top_k, ...), chosen per model family in sampling.ts. Sent only when defined. */
+  sampling?: SamplingExtras;
 }
 
 export const DEFAULT_IDLE_TIMEOUT_MS = 180_000;
@@ -57,6 +60,7 @@ export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => 
   };
   if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
   if (cfg.maxTokens) { payload.max_tokens = cfg.maxTokens; }
+  Object.assign(payload, samplingBody(cfg.sampling));
   const body = JSON.stringify(payload);
   const lib = url.protocol === 'https:' ? https : http;
 
@@ -184,4 +188,5 @@ export function withRetry(fn: LlmFn, opts: { retries?: number; baseDelayMs?: num
   };
 }
 
-export const streamChat: LlmFn = withRetry(streamChatOnce);
+/** Retries transient failures, and once without the non-standard sampling fields when the gateway rejects them. */
+export const streamChat: LlmFn = withRetry(withSamplingFallback(streamChatOnce));

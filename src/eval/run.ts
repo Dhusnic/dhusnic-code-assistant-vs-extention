@@ -15,6 +15,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { streamChat } from '../core/llm';
+import { resolveSampling } from '../core/sampling';
 import { Effort, isEffort } from '../core/policy';
 import { formatReport, runEval } from './runner';
 import { findTasksDir, loadTasks } from './tasks';
@@ -73,7 +74,7 @@ async function main(): Promise<number> {
   console.log(`Running ${tasks.length} task(s) × ${args.repeat} with ${model} (effort ${args.effort})\n`);
   const report = await runEval({
     tasks, effort: args.effort, repeat: args.repeat, keep: args.keep, logDir, print: (l) => console.log(l),
-    llmConfig: { baseUrl, apiKey, model, temperature: 0.2, allowSelfSigned: process.env.INFRAON_EVAL_ALLOW_SELF_SIGNED === '1' },
+    llmConfig: { baseUrl, apiKey, model, ...resolveSampling(model), allowSelfSigned: process.env.INFRAON_EVAL_ALLOW_SELF_SIGNED === '1' },
   }, { llm: streamChat });
   const file = path.join(outDir, `${stamp}.json`);
   fs.writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);

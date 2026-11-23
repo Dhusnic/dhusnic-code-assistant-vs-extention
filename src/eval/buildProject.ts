@@ -21,6 +21,7 @@ import { Agent, AgentDeps, DELEGATION_TOOLS } from '../core/agent';
 import { BUILTIN_AGENT_TYPES, toolsForType } from '../core/agentTypes';
 import { createFsTools } from '../core/fstools';
 import { LlmConfig, LlmFn, streamChat } from '../core/llm';
+import { resolveSampling } from '../core/sampling';
 import { Effort, isEffort } from '../core/policy';
 import { Answers, UserQuestion } from '../core/questions';
 import { AgentSpec, SessionManager, UiEvent } from '../core/runtime';
@@ -452,7 +453,7 @@ async function main(): Promise<number> {
   const outDir = args.out ? path.resolve(args.out) : path.join(os.tmpdir(), `infraon-build-${stamp}`);
   console.log(`Building "taskly" end to end in ${outDir}\n`);
   const report = await runBuild({
-    llmConfig: { baseUrl, apiKey, model, temperature: 0.2, allowSelfSigned: process.env.INFRAON_EVAL_ALLOW_SELF_SIGNED === '1' },
+    llmConfig: { baseUrl, apiKey, model, ...resolveSampling(model), allowSelfSigned: process.env.INFRAON_EVAL_ALLOW_SELF_SIGNED === '1' },
     effort: args.effort, idleSeconds: args.idle, pendingSeconds: args.pending, timeoutSeconds: args.timeout, maxFollowUps: args.followups, maxRounds: args.rounds, outDir,
   }, streamChat);
   const file = path.join(results, `build-${stamp}.json`);

@@ -134,7 +134,7 @@ export async function summarizeSession(
   const facts = collectFacts(title || 'Untitled session', agents, root);
   if (!facts.turns) { return { text: renderHandoff(facts, fallbackNarrative(facts, 'the session has no messages yet')), facts, usedLlm: false }; }
   try {
-    const r = await llm({ ...cfg, temperature: 0.2, maxTokens: 1500 }, handoffMessages(facts, agents), [], () => {}, signal);
+    const r = await llm({ ...cfg, maxTokens: 1500 }, handoffMessages(facts, agents), [], () => {}, signal);
     const narrative = r.content.trim();
     if (!narrative) { throw new Error('empty response'); }
     return { text: renderHandoff(facts, narrative), facts, usedLlm: true };

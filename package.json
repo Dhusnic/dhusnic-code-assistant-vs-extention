@@ -237,6 +237,21 @@
                     "infraonAssistant.temperature": {
                         "type": "number",
                         "default": 0.2,
+                        "markdownDescription": "Sampling temperature. Only used when you set it explicitly: otherwise each model family gets its vendor-recommended sampling (for example Qwen3-Coder: temperature 0.7, top_p 0.8, top_k 20, repetition_penalty 1.05), and unknown models get 0.2. `#infraonAssistant.sampling#` overrides this.",
+                        "order": 5
+                    },
+                    "infraonAssistant.sampling": {
+                        "type": "object",
+                        "default": {},
+                        "markdownDescription": "Override the model's recommended sampling. Set only the fields you want to change; `null` removes the model's value so the gateway's default applies. `top_k` and `repetition_penalty` are left out automatically when the gateway rejects them.",
+                        "properties": {
+                            "temperature": { "type": ["number", "null"], "minimum": 0, "maximum": 2 },
+                            "top_p": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1 },
+                            "top_k": { "type": ["integer", "null"], "minimum": -1 },
+                            "repetition_penalty": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 2 },
+                            "presence_penalty": { "type": ["number", "null"], "minimum": -2, "maximum": 2 }
+                        },
+                        "additionalProperties": false,
                         "order": 5
                     },
                     "infraonAssistant.contextWindow": {
