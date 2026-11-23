@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.31.0 - INSTALL OR UPDATE (macOS)
+INFRAON CODE ASSISTANT 0.31.1 - INSTALL OR UPDATE (macOS)
 
 First install
 1. Double-click the zip to extract it.
@@ -26,6 +26,13 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.31.1: clearer chat and a working Compact button
+- Your message now stays pinned at the top of the chat while you scroll through that turn's work.
+- The agent's replies, tool calls and approvals hang off a timeline with a status dot for each step
+  (running, done, failed, waiting for you).
+- Compact (the context ring, or /compact) now also works while the agent is busy: it runs before the
+  agent's next step instead of showing an error.
 
 New in 0.31.0: developer-workflow skills
 - /code-review reviews your changes for bugs, /simplify cleans them up, /security-review checks them for
