@@ -342,7 +342,7 @@ export class Agent {
         this.lastContext = measureContext(system.content ?? '', memory, specs);
         let res: StreamResult;
         try {
-          res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal);
+          res = await this.deps.llm(cfg, [system, ...this.history], specs, (t) => ui.token(t), signal, (p) => ui.toolWriting?.(p));
         } catch (e) {
           // Too long for the model: learn its real limit from the error, shorten the conversation and try again.
           if (!isContextLengthError(e) || overflows >= MAX_OVERFLOW_RETRIES) { throw e; }

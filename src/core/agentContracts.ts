@@ -3,7 +3,7 @@
  * guards each tool call, the dependencies the host injects, and sub-agent spawning. Kept apart from agent.ts so the
  * host and the tests can depend on the contracts without reading the loop. agent.ts re-exports all of it.
  */
-import type { ChatMessage, LlmConfig, LlmFn } from './llm';
+import type { ChatMessage, LlmConfig, LlmFn, ToolCallProgress } from './llm';
 import type { ApprovalPreview, Tool, ToolKind, WorkspaceRoot } from './tool';
 import type { AgentType } from './agentTypes';
 import type { Answers, UserQuestion } from './questions';
@@ -27,6 +27,8 @@ export interface ApprovalRequest {
 
 export interface AgentUi {
   token(t: string): void;
+  /** The model is still writing a tool call (e.g. a large write_file): its name, size so far and target path. */
+  toolWriting?(p: ToolCallProgress): void;
   toolStart(id: string, name: string, kind: ToolKind, args: string, detail: string, preview?: ApprovalPreview): void;
   toolEnd(id: string, ok: boolean, result: string): void;
   approve(req: ApprovalRequest): Promise<boolean>;

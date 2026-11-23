@@ -118,9 +118,9 @@ async function runOne(task: EvalTask, run: number, opts: EvalOptions, deps: Eval
   const note = (l: string) => log.push(`[${new Date().toISOString().slice(11, 19)}] ${l}`);
 
   let llmCalls = 0, promptTokens = 0, completionTokens = 0;
-  const counted: LlmFn = async (cfg, messages, tools, onToken, signal) => {
+  const counted: LlmFn = async (cfg, messages, tools, onToken, signal, onToolProgress) => {
     llmCalls++;
-    const r = await deps.llm(cfg, messages, tools, onToken, signal);
+    const r = await deps.llm(cfg, messages, tools, onToken, signal, onToolProgress);
     promptTokens += r.usage?.prompt ?? 0;
     completionTokens += r.usage?.completion ?? 0;
     if (r.content) { note(`assistant: ${r.content.slice(0, 2000)}`); }

@@ -86,7 +86,7 @@ export class SafetyCenter {
 
   /** Masks secrets in everything sent to the LLM. */
   wrapLlm(sid: string, llm: LlmFn): LlmFn {
-    return (cfg, messages, tools, onToken, signal) => llm(cfg, this.redacting ? redactMessages(messages, this.vault(sid)) : messages, tools, onToken, signal);
+    return (cfg, messages, tools, onToken, signal, onToolProgress) => llm(cfg, this.redacting ? redactMessages(messages, this.vault(sid)) : messages, tools, onToken, signal, onToolProgress);
   }
 
   private record(entry: Parameters<AuditLog['append']>[0]): void { if (this.auditing) { this.audit.append(entry); } }

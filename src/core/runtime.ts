@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import { Agent, AgentUi, SpawnRequest, SpawnResult } from './agent';
 import { AgentType, BUILTIN_AGENT_TYPES, DEFAULT_AGENT_TYPE, findAgentType } from './agentTypes';
-import { ChatMessage } from './llm';
+import { ChatMessage, ToolCallProgress } from './llm';
 import { diffText } from './diff';
 import { Effort, Mode } from './policy';
 import { historyToUi, titleFrom } from './sessions';
@@ -167,6 +167,14 @@ export interface ManagerDeps {
   /** The current window's workspace key (see workspaceKey); recorded on every session this manager creates or opens. */
   workspace?(): string;
   saveThrottleMs?: number;
+}
+
+/** Status-line text while the model is still writing a tool call, e.g. "Writing index.html… 14.2 KB". */
+export function toolWritingLabel(p: ToolCallProgress): string {
+  const file = p.path ? p.path.split(/[\\/]/).filter(Boolean).pop() : undefined;
+  const size = p.chars < 1024 ? `${p.chars} B` : `${(p.chars / 1024).toFixed(1)} KB`;
+  const verb = p.name === 'write_file' ? 'Writing' : p.name === 'edit_file' || p.name === 'multi_edit' ? 'Editing' : '';
+  return verb && file ? `${verb} ${file}… ${size}` : `Preparing ${p.name}… ${size}`;
 }
 
 export function newSessionId(): string {
@@ -692,6 +700,8 @@ export class SessionManager {
   private uiFor(rt: AgentRuntime): AgentUi {
     return {
       token: (t) => { if (rt.activity !== 'Writing response…') { this.setStatus(rt, rt.status, 'Writing response…'); } this.emit(rt, { type: 'token', text: t }); },
+      // Status line only (not logged): toolStart replaces it with the call's own detail once the call is complete.
+      toolWriting: (p) => this.setStatus(rt, rt.status, toolWritingLabel(p)),
       toolStart: (id, name, kind, args, detail, preview) => {
         let diff;
         if (preview) { rt.previews.set(id, preview); diff = { id, path: preview.path, ...diffText(preview.oldText, preview.newText) }; }

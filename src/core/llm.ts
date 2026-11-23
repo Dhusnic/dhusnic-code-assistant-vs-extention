@@ -29,9 +29,28 @@ export interface StreamResult {
   /** Why the model stopped: "stop", "tool_calls", or "length" when it hit the output-token limit. */
   finishReason?: string;
 }
+/**
+ * A tool call the model is still writing. A large write_file streams for minutes with no visible text, so the
+ * agent's status line shows this instead of "Thinking…". `path` is read from the partial arguments once it is complete.
+ */
+export interface ToolCallProgress { index: number; name: string; chars: number; path?: string }
+/** Wrappers must pass `onToolProgress` through unchanged; it is optional, so callers that ignore it still work. */
 export type LlmFn = (
   cfg: LlmConfig, messages: ChatMessage[], tools: ToolSpec[], onToken: (t: string) => void, signal: AbortSignal,
+  onToolProgress?: (p: ToolCallProgress) => void,
 ) => Promise<StreamResult>;
+
+/** Minimum time between two progress reports for one stream, so the UI is not flooded with updates. */
+export const TOOL_PROGRESS_INTERVAL_MS = 250;
+const PATH_ARG = /"(?:path|file_path|filePath|filename)"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+
+/** Progress for a partly streamed tool call. The path is taken only once its JSON string has closed. */
+export function toolCallProgress(index: number, call: ToolCall): ToolCallProgress {
+  const m = PATH_ARG.exec(call.function.arguments);
+  let path: string | undefined;
+  if (m) { try { path = JSON.parse(`"${m[1]}"`); } catch { path = m[1]; } }
+  return { index, name: call.function.name, chars: call.function.arguments.length, ...(path ? { path } : {}) };
+}
 
 export function endpoint(cfg: LlmConfig, suffix: string): URL {
   return new URL(`${cfg.baseUrl.replace(/\/+$/, '')}${suffix}`);
@@ -52,7 +71,7 @@ export function requestOptions(cfg: LlmConfig, url: URL, method: string, bodyLen
 export const stripUiFields = (messages: ChatMessage[]): Omit<ChatMessage, 'display'>[] =>
   messages.map(({ display: _display, ...m }) => m);
 
-export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => {
+export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal, onToolProgress) => {
   const url = endpoint(cfg, '/chat/completions');
   const payload: Record<string, unknown> = {
     model: cfg.model, messages: stripUiFields(messages), temperature: cfg.temperature, stream: true,
@@ -96,6 +115,8 @@ export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => 
       let usage: TokenUsage | undefined;
       let finishReason: string | undefined;
       const calls: Record<number, ToolCall> = {};
+      let lastProgress = 0;
+      let lastProgressKey = '';
       let buf = '';
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => {
@@ -120,6 +141,16 @@ export const streamChatOnce: LlmFn = (cfg, messages, tools, onToken, signal) => 
               if (tc.id) { cur.id = tc.id; }
               if (tc.function?.name) { cur.function.name += tc.function.name; }
               if (tc.function?.arguments) { cur.function.arguments += tc.function.arguments; }
+              if (onToolProgress && cur.function.name) {
+                // Report at once when the call or its path changes, otherwise at most every TOOL_PROGRESS_INTERVAL_MS.
+                const p = toolCallProgress(i, cur);
+                const key = `${i}|${p.name}|${p.path ?? ''}`;
+                const now = Date.now();
+                if (key !== lastProgressKey || now - lastProgress >= TOOL_PROGRESS_INTERVAL_MS) {
+                  lastProgressKey = key; lastProgress = now;
+                  try { onToolProgress(p); } catch { /* a UI error must not break the stream */ }
+                }
+              }
             }
           } catch { /* partial or keep-alive line */ }
         }
@@ -172,11 +203,11 @@ export const isTransientError = (e: unknown): boolean => {
 export function withRetry(fn: LlmFn, opts: { retries?: number; baseDelayMs?: number } = {}): LlmFn {
   const retries = opts.retries ?? 3;
   const base = opts.baseDelayMs ?? 800;
-  return async (cfg, messages, tools, onToken, signal) => {
+  return async (cfg, messages, tools, onToken, signal, onToolProgress) => {
     for (let attempt = 0; ; attempt++) {
       let emitted = false;
       try {
-        return await fn(cfg, messages, tools, (t) => { emitted = true; onToken(t); }, signal);
+        return await fn(cfg, messages, tools, (t) => { emitted = true; onToken(t); }, signal, onToolProgress);
       } catch (e) {
         if (signal.aborted || emitted || attempt >= retries || !isTransientError(e)) { throw e; }
         await new Promise<void>((resolve, reject) => {

@@ -883,6 +883,7 @@
         "typecheck": "tsc -p . --noEmit",
         "test": "tsc -p . && node --test \"out/test/*.test.js\" && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
         "test:unit": "tsc -p . && node --test \"out/test/*.test.js\"",
+        "test:live": "tsc -p . && node --test --test-concurrency=1 \"out/test/live/*.test.js\"",
         "test:slow": "tsc -p . && node --test --test-concurrency=1 \"out/test/slow/*.test.js\"",
         "test:coverage": "tsc -p . && node --test --experimental-test-coverage --test-coverage-include=\"out/core/**\" --test-coverage-include=\"out/host/**\" \"out/test/*.test.js\"",
         "test:e2e": "npm run compile && node out/e2e/run.js",
