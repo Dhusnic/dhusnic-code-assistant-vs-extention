@@ -29,6 +29,7 @@ import { DiffContentProvider } from './diffProvider';
 import { SessionPanel } from './sessionPanel';
 import { createVsCodeTools } from './vscodeTools';
 import { createNavTools } from './navTools';
+import { repoMapSymbolsFor } from './repoMapSymbols';
 import { createEditDiagnostics } from './editDiagnostics';
 import { ChangeJournal, isArtifactPath } from '../core/changeJournal';
 import { fetchContextWindow } from '../core/modelInfo';
@@ -58,7 +59,9 @@ export class Hub {
   readonly index: FileIndex;
   private fsOptions: FsToolsOptions;
   /** Repo maps per folder (system prompt section and the repo_map tool); the primary folder shares the file index. */
-  private readonly repoMaps = new RepoMaps((root) => (root === this.root ? this.index : new FileIndex(root)));
+  private readonly repoMaps = new RepoMaps((root) => (root === this.root ? this.index : new FileIndex(root)), {
+    symbolsFor: repoMapSymbolsFor(() => this.cfg.get<boolean>('repoMap.enabled', true) && this.cfg.get<boolean>('repoMap.useLanguageServer', true)),
+  });
   private readonly repoMapTool = repoMapTool(this.repoMaps);
   private fsTools: ReturnType<typeof createFsTools>;
   private mcp: McpManager;

@@ -371,6 +371,12 @@
                         "description": "Size of the repo map in the system prompt, in tokens (about 3.5 characters each).",
                         "order": 4
                     },
+                    "infraonAssistant.repoMap.useLanguageServer": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Refine the repo map's classes and functions for Java, Kotlin, C#, Go and PHP with the language server's document symbols (only for the files shown in the map, in the background; the built-in patterns are used when no language server answers).",
+                        "order": 4
+                    },
                     "infraonAssistant.maxConcurrentAgents": {
                         "type": "number",
                         "default": 4,
