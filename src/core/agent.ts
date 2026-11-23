@@ -20,13 +20,13 @@ import { TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoRemi
 import { SKILL_TOOL, expandSkill, findSkill, skillToolSpec } from './skills';
 import { Mode, effortParams, isAllowed, requiresApproval } from './policy';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
-import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact } from './compaction';
+import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, attachWorkingState, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact, workingStateFor } from './compaction';
 import * as path from 'path';
-import { FileReadTracker, clipOutput, resolveIn } from './fstools';
+import { FileReadTracker, resolveIn } from './fstools';
 import { LoopGuard, withNudge } from './loopGuard';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
 import { selfReview, shouldSelfReview } from './selfReview';
-import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, MAX_CHECK_ROUNDS, NOT_RUN, checkLabel, checksPromptSection, exitCodeOf, scopeChecks } from './checks';
+import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, sameDigest, scopeChecks } from './checks';
 import {
   AGENT_TOOL, DELEGATION_TOOLS, PLAN_SPEC, PLAN_TOOL, QUESTION_SPEC, QUESTION_TOOL, SEND_SPEC, SEND_TOOL, TODO_SPEC, TODO_TOOL,
   agentToolSpec, buildSystemPrompt, queuedMessageText,
@@ -180,6 +180,8 @@ export class Agent {
       return true;
     }
     const signal = this.abort?.signal ?? new AbortController().signal;
+    // What was changed, planned and checked so far, appended after the summary so the model does not lose track of it.
+    const state = (forSummary: boolean) => workingStateFor(this.history, this.turnStarts, (n) => this.toolFor(n)?.kind === 'edit', { changed: this.track.changed, todos: this.todoState().todos, checks: this.track.verified }, forSummary);
     try {
       // The latest task list survives the summary, so reminders about unfinished steps keep working afterwards.
       const { todos } = this.todoState();
@@ -192,12 +194,12 @@ export class Agent {
         const out = await this.deps.llm(cfg, sent, [], () => {}, signal);
         ui.spent?.(tokensSpent(out, sent));
         return out.content;
-      }, carry);
-      this.history = res.summarized ? res.history : pruneToolOutputs(this.history, 2, 600);
+      }, carry, state(true));
+      this.history = res.summarized ? res.history : attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
       if (res.summarized) { this.turnStarts = res.turnStarts; }
     } catch (e: any) {
       if (e.message === 'Cancelled') { throw e; }
-      this.history = pruneToolOutputs(this.history, 2, 600);
+      this.history = attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
       ui.info(`Could not summarize the conversation (${e.message}); trimmed old tool output instead.`);
     }
     const after = estimateTokens(this.history);
@@ -293,6 +295,8 @@ export class Agent {
 
     let stopContinues = 0;
     let checkRounds = 0;
+    const maxCheckRounds = checkRoundsFor(run.effort);
+    let lastDigest = '';
     let cutOffs = 0;
     let overflows = 0;
     /** Tool rounds in this turn, and whether the end-of-turn task-list reminder was sent. */
@@ -384,24 +388,29 @@ export class Agent {
           if (dirty && checks.length && !scoped.length) { dirty = false; ui.info('Only documentation changed: project checks skipped.'); }
           // The model already ran every check after its last change and they passed: no need to run them again.
           if (dirty && this.alreadyVerified(checks, scoped)) { dirty = false; }
+          /** Checks still failing after the last allowed fix attempt: a review of that diff would only add noise. */
+          let checksUnresolved = false;
           if (dirty && scoped.length && run.mode !== 'plan' && this.toolFor('run_command')) {
             dirty = false;
             const failed = await this.runChecks(scoped, run, ui, signal, turn);
+            // A fix attempt that leaves exactly the same failure behind is no progress: stop instead of retrying.
+            const digest = failed ? digestCheckOutput(failed.name, failed.command, failed.output, CHECK_OUTPUT_CHARS) : '';
+            const stuck = sameDigest(digest, lastDigest);
+            lastDigest = digest;
             if (failed) {
-              if (checkRounds < MAX_CHECK_ROUNDS) {
+              if (checkRounds < maxCheckRounds && !stuck) {
                 checkRounds++;
-                this.history.push({
-                  role: 'user',
-                  content: `The project checks failed after your changes (automatic check ${checkRounds} of ${MAX_CHECK_ROUNDS}). Read the output, fix the root cause, and do not finish until the checks pass. If the failure is unrelated to your change (it was already failing before), say so instead of changing unrelated code.\n\n### ${failed.name}: \`${failed.command}\`\n${clipOutput(failed.output, CHECK_OUTPUT_CHARS)}`,
-                  display: `Checks failed: ${failed.name}`,
-                });
+                this.history.push({ role: 'user', content: checkFailureMessage(digest, checkRounds, maxCheckRounds), display: `Checks failed: ${failed.name}` });
                 continue;
               }
-              ui.info(`Project checks are still failing (${failed.name}: ${failed.command}) after ${MAX_CHECK_ROUNDS} fix attempts. Review the output above.`);
+              checksUnresolved = true;
+              ui.info(stuck
+                ? `Project checks are still failing (${failed.name}: ${failed.command}) with the same errors after the last fix attempt, so no more automatic retries. Review the output above.`
+                : `Project checks are still failing (${failed.name}: ${failed.command}) after ${maxCheckRounds} fix attempts. Review the output above.`);
             }
           }
           // Once per turn that changed files: a fresh-context review of the diff; issues go back to the model (selfReview.ts).
-          if (!reviewed && shouldSelfReview(this.deps.selfReview?.(), run.effort, run.mode, !!this.deps.subagent, this.track.abs.size)) {
+          if (!reviewed && !checksUnresolved && shouldSelfReview(this.deps.selfReview?.(), run.effort, run.mode, !!this.deps.subagent, this.track.abs.size)) {
             reviewed = true;
             const issues = await selfReview({ deps: this.deps, run, turn, turnHistory: this.history.slice(this.turnStarts[turn]), files: [...this.track.abs], ui, signal });
             if (issues) { this.history.push(issues); continue; }
