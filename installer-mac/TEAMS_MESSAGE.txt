@@ -1,14 +1,15 @@
 Hi team 👋
 
-Infraon Code Assistant 0.27.0 is out, and it can now test your apps 🧪
+Infraon Code Assistant 0.28.0 is out: it makes fewer mistakes when it writes code 🎯
 
 🆕 What's new
-• Browser testing: the agent opens your web app in your installed Chrome/Edge, clicks and types like a user, and reports pages that fail to load, JavaScript errors, failed API calls and broken images
-• Failure testing: it can make APIs fail or slow down, or take the network offline, to check how your app copes
-• Data checks: it compares what the page shows with the API, the database (read-only) or an expected-data file
-• Type /qa <url or feature> for a full QA pass; the report is saved in test-reports/
-• Also new: Generate Tests and Add Documentation for selected code, and a commit-message button in Source Control
-• Already on 0.26.0? You don't need the installer: the update installs by itself, just click "Reload Now" when asked (or Ctrl+Shift+P → "Infraon Assistant: Check for Updates")
+• Catches its own errors: after each edit it sees new errors in the file right away and fixes them
+• No more going round in circles: it notices a repeated failing edit or command and changes approach
+• Self-review: at High and Max effort it checks its changes against your request before finishing
+• Knows your project: it starts with a map of your code, so it finds the right files faster
+• Clearer test and build failures, and long conversations keep track of what was changed
+• Optional: smarter code search by meaning (setting infraonAssistant.embeddingModel = "auto"; off by default)
+• Already on 0.26.0 or later? You don't need the installer: the update installs by itself, just click "Reload Now" when asked (or Ctrl+Shift+P → "Infraon Assistant: Check for Updates")
 
 ⬇️ Download (office network / VPN only)
 • Windows: https://172.16.48.75:30400/infraon-assistant/downloads/InfraonCodeAssistant-Installer.zip

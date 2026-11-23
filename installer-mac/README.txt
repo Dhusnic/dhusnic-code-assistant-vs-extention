@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.27.0 - INSTALL OR UPDATE (macOS)
+INFRAON CODE ASSISTANT 0.28.0 - INSTALL OR UPDATE (macOS)
 
 First install
 1. Double-click the zip to extract it.
@@ -27,15 +27,20 @@ What the installer does
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
 
-New in 0.27.0: testing toolkit and code tools
-- The agent can test your web apps in your installed Chrome or Edge: it opens pages, clicks and types,
-  and reports pages that fail to load, JavaScript errors, failed API calls and broken images.
-- It can simulate failures (API errors, slow or offline network), test APIs, compare what the page
-  shows with the API, the database or an expected-data file, and run read-only database queries.
-- Type /qa <url or feature> for a full QA pass with a report saved in test-reports/.
-- Database passwords: Cmd+Shift+P -> "Infraon Assistant: Set Test Database Password".
-- Also new: Generate Tests and Add Documentation for the selected code, a commit-message button in
-  Source Control, and search_code (find code by what it does).
+New in 0.28.0: more accurate coding
+- After each edit the agent sees any new errors in the file right away and fixes them.
+- It notices when it is going round in circles (the same failing edit or command) and changes approach.
+- Model settings are tuned per model, so answers are steadier.
+- At High and Max effort it reviews its own changes against your request before finishing
+  (setting: infraonAssistant.selfReview).
+- It starts with a map of your project, so it finds the right files faster.
+- Clearer test and build failures, more fix attempts at higher effort, and long conversations keep
+  track of what was changed.
+- Optional: smarter code search by meaning. Set infraonAssistant.embeddingModel to "auto" or to an
+  embedding model on the gateway. Off by default.
+
+New in 0.27.0: testing toolkit (/qa), browser and API testing, Generate Tests, Add Documentation,
+a commit-message button in Source Control, and search_code.
 
 Automatic updates (since 0.26.0)
 - New versions are published on the Infraon gateway server and the assistant installs them by itself
