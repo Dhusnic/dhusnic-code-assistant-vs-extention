@@ -8,6 +8,7 @@
  *   agentTools.ts      the built-in tools as the model sees them, and the system prompt
  *   checks.ts          which project checks to run for a set of changes, and how their output is read
  *   loopGuard.ts       notices the model repeating itself within a turn, and the reminders that nudge it out
+ *   selfReview.ts      the once-per-turn fresh-context review of the turn's diff before a turn that changed files ends
  */
 import { ChatMessage, StreamResult, ToolCall, ToolSpec } from './llm';
 import { contextLimitFromError, isContextLengthError } from './modelInfo';
@@ -24,6 +25,7 @@ import * as path from 'path';
 import { FileReadTracker, clipOutput, resolveIn } from './fstools';
 import { LoopGuard, withNudge } from './loopGuard';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
+import { selfReview, shouldSelfReview } from './selfReview';
 import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, MAX_CHECK_ROUNDS, NOT_RUN, checkLabel, checksPromptSection, exitCodeOf, scopeChecks } from './checks';
 import {
   AGENT_TOOL, DELEGATION_TOOLS, PLAN_SPEC, PLAN_TOOL, QUESTION_SPEC, QUESTION_TOOL, SEND_SPEC, SEND_TOOL, TODO_SPEC, TODO_TOOL,
@@ -298,6 +300,7 @@ export class Agent {
     let todoEndNudged = false;
     /** Notices the model repeating itself (same call, failing edits or commands) and nudges it; reset per turn. */
     const loop = new LoopGuard();
+    let reviewed = false;
     /** Files changed since the checks last ran. */
     let dirty = false;
     this.track = { changed: new Set(), abs: new Set(), verified: [] };
@@ -396,6 +399,12 @@ export class Agent {
               }
               ui.info(`Project checks are still failing (${failed.name}: ${failed.command}) after ${MAX_CHECK_ROUNDS} fix attempts. Review the output above.`);
             }
+          }
+          // Once per turn that changed files: a fresh-context review of the diff; issues go back to the model (selfReview.ts).
+          if (!reviewed && shouldSelfReview(this.deps.selfReview?.(), run.effort, run.mode, !!this.deps.subagent, this.track.abs.size)) {
+            reviewed = true;
+            const issues = await selfReview({ deps: this.deps, run, turn, turnHistory: this.history.slice(this.turnStarts[turn]), files: [...this.track.abs], ui, signal });
+            if (issues) { this.history.push(issues); continue; }
           }
           // Ending a working turn with steps still open leaves the list (and the UI) stuck on a step: ask once to settle it.
           if (!todoEndNudged && toolRounds > 0 && !this.deps.subagent && run.mode !== 'plan') {
