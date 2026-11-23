@@ -221,3 +221,61 @@ export function withRetry(fn: LlmFn, opts: { retries?: number; baseDelayMs?: num
 
 /** Retries transient failures, and once without the non-standard sampling fields when the gateway rejects them. */
 export const streamChat: LlmFn = withRetry(withSamplingFallback(streamChatOnce));
+
+/** A raw (non-chat) text completion: the prompt is sent as-is, so fill-in-the-middle tokens reach the model. */
+export interface TextCompletionRequest { prompt: string; stop?: string[]; maxTokens?: number; temperature?: number }
+export type TextCompleteFn = (cfg: LlmConfig, req: TextCompletionRequest, signal: AbortSignal) => Promise<string>;
+
+/** Inline completions are short; a gateway that has not answered in this long will not answer usefully. */
+export const TEXT_COMPLETION_TIMEOUT_MS = 30_000;
+const MAX_TEXT_RESPONSE = 1_000_000;
+
+/**
+ * POST {baseUrl}/completions (the OpenAI legacy completions endpoint, which vLLM, llama.cpp, SGLang and LiteLLM
+ * serve) without streaming, and return choices[0].text. Errors use the same `LLM HTTP <status>: <body>` shape as
+ * streamChatOnce, so callers can tell "endpoint not supported" (404/400/...) from transient failures. No retries:
+ * an inline completion that fails is simply not shown.
+ */
+export const completeText: TextCompleteFn = (cfg, req, signal) => {
+  const url = endpoint(cfg, '/completions');
+  const payload: Record<string, unknown> = {
+    model: cfg.model, prompt: req.prompt, temperature: req.temperature ?? cfg.temperature, stream: false,
+    max_tokens: req.maxTokens ?? cfg.maxTokens ?? 128,
+  };
+  if (req.stop?.length) { payload.stop = req.stop; }
+  const body = JSON.stringify(payload);
+  const lib = url.protocol === 'https:' ? https : http;
+  return new Promise<string>((outerResolve, outerReject) => {
+    if (signal.aborted) { outerReject(new Error('Cancelled')); return; }
+    let settled = false;
+    const timeoutMs = cfg.idleTimeoutMs && cfg.idleTimeoutMs > 0 ? Math.min(cfg.idleTimeoutMs, TEXT_COMPLETION_TIMEOUT_MS) : TEXT_COMPLETION_TIMEOUT_MS;
+    const done = () => { settled = true; clearTimeout(timer); signal.removeEventListener('abort', onAbort); };
+    const resolve = (r: string) => { if (!settled) { done(); outerResolve(r); } };
+    const reject = (e: Error) => { if (!settled) { done(); outerReject(e); } };
+    const onAbort = () => { req2.destroy(); reject(new Error('Cancelled')); };
+    const timer = setTimeout(() => {
+      const err = new Error(`LLM completion timed out after ${Math.round(timeoutMs / 1000)} s (ETIMEDOUT).`);
+      reject(err); req2.destroy(err);
+    }, timeoutMs);
+    const req2 = lib.request(requestOptions(cfg, url, 'POST', Buffer.byteLength(body)), (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (d: string) => { if (data.length < MAX_TEXT_RESPONSE) { data += d; } });
+      res.on('end', () => {
+        if ((res.statusCode ?? 500) >= 400) { reject(new Error(`LLM HTTP ${res.statusCode}: ${data.slice(0, 500)}`)); return; }
+        try {
+          const obj = JSON.parse(data);
+          const text = obj?.choices?.[0]?.text;
+          if (typeof text !== 'string') { reject(new Error('LLM HTTP 200 without choices[0].text: completions not supported')); return; }
+          resolve(text);
+        } catch { reject(new Error(`LLM completion: invalid JSON response: ${data.slice(0, 200)}`)); }
+      });
+      res.on('error', reject);
+      res.on('aborted', () => reject(new Error('LLM completion ended early (ECONNRESET).')));
+    });
+    req2.on('error', reject);
+    signal.addEventListener('abort', onAbort, { once: true });
+    req2.write(body);
+    req2.end();
+  });
+};
