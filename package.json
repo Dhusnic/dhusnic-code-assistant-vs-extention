@@ -481,6 +481,22 @@
                         "default": "",
                         "description": "Model for completions. Empty = use the model selected in the chat.",
                         "order": 3
+                    },
+                    "infraonAssistant.inlineCompletions.mode": {
+                        "type": "string",
+                        "enum": [
+                            "auto",
+                            "fim",
+                            "chat"
+                        ],
+                        "enumDescriptions": [
+                            "Fill-in-the-middle through the gateway's /completions endpoint for code models known to support it (Qwen-Coder, DeepSeek-Coder, StarCoder, Code Llama), otherwise the chat prompt. Falls back to chat for the session if the gateway rejects FIM.",
+                            "Always fill-in-the-middle through /completions (Qwen-Coder tokens for unknown models). No fallback.",
+                            "Always the chat prompt through /chat/completions."
+                        ],
+                        "default": "auto",
+                        "description": "How suggestions are requested from the model.",
+                        "order": 4
                     }
                 }
             },

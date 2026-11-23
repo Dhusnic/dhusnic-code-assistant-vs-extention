@@ -47,7 +47,7 @@ User types in the session tab (media/session.js)
 | Context | `core/memoryFiles.ts`, `core/mentions.ts`, `core/skills.ts`, `core/teamSkills.ts`, `core/compaction.ts`, `core/handoff.ts` |
 | Remote servers | `core/ssh.ts`, `core/remoteTools.ts`, `host/features/remote.ts`, `host/features/servers.ts` |
 | Web access | `core/web/` (see `core/web/types.ts` for the layout) |
-| Editor features | `host/completions.ts`, `core/inlineEdit.ts`, `host/features/editorActions.ts` (light-bulb actions: fix, edit, document, generate tests), `host/features/scm.ts` (commit message button in Source Control), `host/diffProvider.ts` |
+| Editor features | `host/completions.ts` + `core/completion.ts` (ghost text: FIM via `/completions` per model family in `core/fim.ts`, chat fallback; open-tab and imported-signature context from `core/completionContext.ts`), `core/inlineEdit.ts`, `host/features/editorActions.ts` (light-bulb actions: fix, edit, document, generate tests), `host/features/scm.ts` (commit message button in Source Control), `host/diffProvider.ts` |
 | Updates | `core/updater.ts`, `core/updateKey.ts`, `host/updater.ts`, `scripts/sign-update.js` |
 
 ## Activation and loading
