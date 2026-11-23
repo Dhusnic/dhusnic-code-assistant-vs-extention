@@ -12,6 +12,7 @@ import type { Skill } from './skills';
 import type { Effort, Mode } from './policy';
 import type { FileChangeFeed } from './changeJournal';
 import type { CheckCommand } from './checks';
+import type { EditDiagnostics } from './editDiagnostics';
 
 export interface ApprovalRequest {
   id: string;
@@ -106,6 +107,8 @@ export interface AgentDeps {
   fileChanges?: FileChangeFeed;
   /** All workspace folders (multi-root); the first that equals root is the primary one. */
   roots?: () => WorkspaceRoot[];
+  /** The editor's diagnostics, so edit tools can report the errors an edit introduced (see editDiagnostics.ts). */
+  diagnostics?: EditDiagnostics;
 }
 
 export interface SpawnRequest {

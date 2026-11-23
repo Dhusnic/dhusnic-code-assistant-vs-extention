@@ -367,6 +367,12 @@
                         "default": [],
                         "description": "Commands that check this project after code changes, run in order (for example `npm run lint`, `npm test`). Overrides detection. Leave empty to detect them.",
                         "order": 10
+                    },
+                    "infraonAssistant.diagnosticsAfterEdit": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "After the agent edits or writes a file, wait briefly (up to 2 seconds) for the language server and add any new errors in that file to the edit's result, so the agent can fix them right away.",
+                        "order": 11
                     }
                 }
             },
