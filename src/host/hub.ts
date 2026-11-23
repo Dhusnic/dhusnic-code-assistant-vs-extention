@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { Agent, CheckCommand, DELEGATION_TOOLS } from '../core/agent';
+import { Agent, CheckCommand, DELEGATION_TOOLS, relatedTestsFor } from '../core/agent';
 import { detectVerifyCommands } from '../core/verify';
 import { parseSelfReviewSetting } from '../core/selfReview';
 import { AgentType, BUILTIN_AGENT_TYPES, loadAgentTypes, toolsForType } from '../core/agentTypes';
@@ -371,12 +371,18 @@ export class Hub {
     if (s.main().status === 'error') { throw new Error(s.main().error ?? 'The scheduled task failed.'); }
   }
 
-  /** Commands that check the project after the agent changes code: the user's setting, else INFRAON.md, else detected. */
+  /**
+   * Commands that check the project after the agent changes code: the user's setting, else INFRAON.md, else detected.
+   * With checks.relatedTestsFirst off, no test check keeps its related form, so fix rounds run the full commands.
+   */
   private async projectChecks(root: string): Promise<CheckCommand[]> {
     if (!this.cfg.get<boolean>('autoVerify', true)) { return []; }
+    const related = this.cfg.get<boolean>('checks.relatedTestsFirst', true);
     const custom = (this.cfg.get<unknown[]>('verifyCommands', []) ?? []).filter((c): c is string => typeof c === 'string' && !!c.trim());
-    if (custom.length) { return custom.map((command) => ({ name: 'verify', command: command.trim(), timeoutSeconds: 600 })); }
-    return detectVerifyCommands(root);
+    const checks: CheckCommand[] = custom.length
+      ? custom.map((c) => { const command = c.trim(); const r = relatedTestsFor(command); return { name: 'verify', command, timeoutSeconds: 600, ...(r ? { related: r } : {}) }; })
+      : await detectVerifyCommands(root);
+    return related ? checks : checks.map(({ related: _, ...c }) => c);
   }
 
   /** Every file change in the workspace, from any source, so the agents' checks also cover commands and sub-agents. */

@@ -1,11 +1,19 @@
+/**
+ * Finds the commands that check a project after code changes: a "## Verify" section of INFRAON.md / CLAUDE.md /
+ * AGENTS.md, else detection from package.json, pyproject.toml, go.mod, Cargo.toml, pom.xml, Gradle or a Makefile.
+ * A test command of a recognised runner also gets its related form (checks.ts relatedTestsFor), and findTestFiles
+ * lists the project's test files that the related form of pytest and node --test maps changed files to.
+ */
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { RelatedTests, relatedTestsFor } from './checks';
+import { globToRegex } from './glob';
 
 /** A command that checks the project after code changes (type check, lint or tests). */
 export interface VerifyCommand {
   name: string; command: string; timeoutSeconds: number; source: string;
-  /** A faster form that checks only what the changed files affect: {files} = changed source files, {dirs} = their folders as ./dir. */
-  related?: string;
+  /** How to run only the tests the changed files affect (checks.ts relatedTestsFor). */
+  related?: RelatedTests;
 }
 
 const MAX_COMMANDS = 5;
@@ -85,12 +93,9 @@ async function fromPackageJson(root: string): Promise<VerifyCommand[]> {
   }
   if (usable('lint')) { out.push({ name: 'lint', command: run('lint'), timeoutSeconds: 300, source: 'package.json' }); }
   if (usable('test') && !/no test specified/i.test(String(scripts.test))) {
-    // Jest and Vitest can run only the tests that depend on the changed files: much faster in a big project.
-    const t = String(scripts.test);
-    const exec = run('test').startsWith('yarn') ? 'yarn' : run('test').startsWith('pnpm') ? 'pnpm exec' : run('test').startsWith('bun') ? 'bunx' : 'npx';
-    const related = /\bjest\b/.test(t) && !/\s--/.test(t) ? `${exec} jest --findRelatedTests {files} --passWithNoTests`
-      : /\bvitest\b/.test(t) && !/\s--/.test(t) ? `${exec} vitest related {files} --run --passWithNoTests`
-        : undefined;
+    // A recognised runner can run only the tests the changed files affect: much faster in a big project.
+    const exec = pm === 'yarn' ? 'yarn' : pm === 'pnpm' ? 'pnpm exec' : pm === 'bun' ? 'bunx' : 'npx';
+    const related = relatedTestsFor(run('test'), String(scripts.test), exec);
     out.push({ name: 'test', command: run('test'), timeoutSeconds: 600, source: 'package.json', ...(related ? { related } : {}) });
   }
   return out;
@@ -106,7 +111,7 @@ async function fromPython(root: string): Promise<VerifyCommand[]> {
     : pyproject?.includes('[tool.pytest') ? 'pyproject.toml'
       : setupCfg?.includes('[tool:pytest]') ? 'setup.cfg'
         : (await exists(path.join(root, 'conftest.py'))) ? 'conftest.py' : undefined;
-  if (pytestSource) { out.push({ name: 'test', command: 'python -m pytest -q -x', timeoutSeconds: 600, source: pytestSource }); }
+  if (pytestSource) { out.push({ name: 'test', command: 'python -m pytest -q -x', timeoutSeconds: 600, source: pytestSource, related: relatedTestsFor('python -m pytest -q -x') }); }
   return out;
 }
 
@@ -114,7 +119,7 @@ async function fromOthers(root: string, platform: NodeJS.Platform): Promise<Veri
   const out: VerifyCommand[] = [];
   if (await exists(path.join(root, 'go.mod'))) {
     out.push({ name: 'lint', command: 'go vet ./...', timeoutSeconds: 300, source: 'go.mod' });
-    out.push({ name: 'test', command: 'go test ./...', timeoutSeconds: 600, source: 'go.mod', related: 'go test {dirs}' });
+    out.push({ name: 'test', command: 'go test ./...', timeoutSeconds: 600, source: 'go.mod', related: relatedTestsFor('go test ./...') });
   }
   if (await exists(path.join(root, 'Cargo.toml'))) {
     out.push({ name: 'typecheck', command: 'cargo check', timeoutSeconds: 600, source: 'Cargo.toml' });
@@ -141,7 +146,10 @@ export async function detectVerifyCommands(root: string, platform: NodeJS.Platfo
     if (text === undefined) { continue; }
     const cmds = parseVerifySection(text);
     if (cmds.length) {
-      return [...new Set(cmds)].slice(0, MAX_COMMANDS).map((command) => ({ name: 'verify', command, timeoutSeconds: 600, source: file }));
+      return [...new Set(cmds)].slice(0, MAX_COMMANDS).map((command) => {
+        const related = relatedTestsFor(command);
+        return { name: 'verify', command, timeoutSeconds: 600, source: file, ...(related ? { related } : {}) };
+      });
     }
   }
   const found = [...(await fromPackageJson(root)), ...(await fromPython(root)), ...(await fromOthers(root, platform))];
@@ -162,4 +170,33 @@ export async function detectVerifyCommands(root: string, platform: NodeJS.Platfo
 /** Markdown bullet list of the commands for the system prompt; '' when there are none. */
 export function formatVerifyCommands(cmds: VerifyCommand[]): string {
   return cmds.map((c) => `- ${c.name}: \`${c.command}\` (from ${c.source})`).join('\n');
+}
+
+/** Folders never searched for test files. Build output (out, dist) is searched: compiled tests may be what runs. */
+const NO_TESTS_IN = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.next', 'target', '.tox']);
+
+/**
+ * The workspace files (relative, forward slashes) matching any of these globs, at most `limit`. Each glob is walked
+ * from its fixed leading folders (out/test for "out/test/*.test.js"), so a narrow glob reads little of the disk.
+ */
+export async function findTestFiles(root: string, globs: string[], limit = 5000): Promise<string[]> {
+  const out = new Set<string>();
+  for (const glob of globs) {
+    const g = glob.replace(/\\/g, '/').replace(/^\.\//, '');
+    const parts = g.split('/');
+    const fixed: string[] = [];
+    while (parts.length > 1 && !/[*?{[]/.test(parts[0])) { fixed.push(parts.shift()!); }
+    const re = globToRegex(g);
+    const walk = async (rel: string): Promise<void> => {
+      let ents;
+      try { ents = await fs.readdir(path.join(root, rel), { withFileTypes: true }); } catch { return; }
+      for (const e of ents) {
+        if (out.size >= limit) { return; }
+        const r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) { if (!NO_TESTS_IN.has(e.name)) { await walk(r); } } else if (e.isFile() && re.test(r)) { out.add(r); }
+      }
+    };
+    await walk(fixed.join('/'));
+  }
+  return [...out];
 }
