@@ -18,11 +18,11 @@ import { TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoRemi
 import { SKILL_TOOL, expandSkill, findSkill, skillToolSpec } from './skills';
 import { Mode, effortParams, isAllowed, requiresApproval } from './policy';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
-import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact } from './compaction';
+import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, attachWorkingState, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact, workingStateFor } from './compaction';
 import * as path from 'path';
-import { FileReadTracker, clipOutput, resolveIn } from './fstools';
+import { FileReadTracker, resolveIn } from './fstools';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
-import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, MAX_CHECK_ROUNDS, NOT_RUN, checkLabel, checksPromptSection, exitCodeOf, scopeChecks } from './checks';
+import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, sameDigest, scopeChecks } from './checks';
 import {
   AGENT_TOOL, DELEGATION_TOOLS, PLAN_SPEC, PLAN_TOOL, QUESTION_SPEC, QUESTION_TOOL, SEND_SPEC, SEND_TOOL, TODO_SPEC, TODO_TOOL,
   agentToolSpec, buildSystemPrompt, queuedMessageText,
@@ -176,6 +176,8 @@ export class Agent {
       return true;
     }
     const signal = this.abort?.signal ?? new AbortController().signal;
+    // What was changed, planned and checked so far, appended after the summary so the model does not lose track of it.
+    const state = (forSummary: boolean) => workingStateFor(this.history, this.turnStarts, (n) => this.toolFor(n)?.kind === 'edit', { changed: this.track.changed, todos: this.todoState().todos, checks: this.track.verified }, forSummary);
     try {
       // The latest task list survives the summary, so reminders about unfinished steps keep working afterwards.
       const { todos } = this.todoState();
@@ -188,12 +190,12 @@ export class Agent {
         const out = await this.deps.llm(cfg, sent, [], () => {}, signal);
         ui.spent?.(tokensSpent(out, sent));
         return out.content;
-      }, carry);
-      this.history = res.summarized ? res.history : pruneToolOutputs(this.history, 2, 600);
+      }, carry, state(true));
+      this.history = res.summarized ? res.history : attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
       if (res.summarized) { this.turnStarts = res.turnStarts; }
     } catch (e: any) {
       if (e.message === 'Cancelled') { throw e; }
-      this.history = pruneToolOutputs(this.history, 2, 600);
+      this.history = attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
       ui.info(`Could not summarize the conversation (${e.message}); trimmed old tool output instead.`);
     }
     const after = estimateTokens(this.history);
@@ -289,6 +291,8 @@ export class Agent {
 
     let stopContinues = 0;
     let checkRounds = 0;
+    const maxCheckRounds = checkRoundsFor(run.effort);
+    let lastDigest = '';
     let cutOffs = 0;
     let overflows = 0;
     /** Tool rounds in this turn, and whether the end-of-turn task-list reminder was sent. */
@@ -380,17 +384,19 @@ export class Agent {
           if (dirty && scoped.length && run.mode !== 'plan' && this.toolFor('run_command')) {
             dirty = false;
             const failed = await this.runChecks(scoped, run, ui, signal, turn);
+            // A fix attempt that leaves exactly the same failure behind is no progress: stop instead of retrying.
+            const digest = failed ? digestCheckOutput(failed.name, failed.command, failed.output, CHECK_OUTPUT_CHARS) : '';
+            const stuck = sameDigest(digest, lastDigest);
+            lastDigest = digest;
             if (failed) {
-              if (checkRounds < MAX_CHECK_ROUNDS) {
+              if (checkRounds < maxCheckRounds && !stuck) {
                 checkRounds++;
-                this.history.push({
-                  role: 'user',
-                  content: `The project checks failed after your changes (automatic check ${checkRounds} of ${MAX_CHECK_ROUNDS}). Read the output, fix the root cause, and do not finish until the checks pass. If the failure is unrelated to your change (it was already failing before), say so instead of changing unrelated code.\n\n### ${failed.name}: \`${failed.command}\`\n${clipOutput(failed.output, CHECK_OUTPUT_CHARS)}`,
-                  display: `Checks failed: ${failed.name}`,
-                });
+                this.history.push({ role: 'user', content: checkFailureMessage(digest, checkRounds, maxCheckRounds), display: `Checks failed: ${failed.name}` });
                 continue;
               }
-              ui.info(`Project checks are still failing (${failed.name}: ${failed.command}) after ${MAX_CHECK_ROUNDS} fix attempts. Review the output above.`);
+              ui.info(stuck
+                ? `Project checks are still failing (${failed.name}: ${failed.command}) with the same errors after the last fix attempt, so no more automatic retries. Review the output above.`
+                : `Project checks are still failing (${failed.name}: ${failed.command}) after ${maxCheckRounds} fix attempts. Review the output above.`);
             }
           }
           // Ending a working turn with steps still open leaves the list (and the UI) stuck on a step: ask once to settle it.

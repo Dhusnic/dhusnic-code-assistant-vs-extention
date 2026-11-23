@@ -1,9 +1,14 @@
 /**
  * The project's own checks (type check, lint, tests) as the agent loop sees them: which ones to run for a set of changed
  * files, how they are described in the system prompt, and how their results are read. Detecting the commands of a
- * project lives in verify.ts; running them, with approvals and rules, stays in the agent loop (agent.ts).
+ * project lives in verify.ts; running them, with approvals and rules, stays in the agent loop (agent.ts). A failing
+ * check's output is condensed by checkDigest.ts before it goes back to the model; how many fix rounds a turn gets
+ * depends on the effort level, and a round that reports the very same failure as the one before ends the loop early.
  */
 import * as path from 'path';
+import type { Effort } from './policy';
+
+export { digestCheckOutput, sameDigest } from './checkDigest';
 
 /** One project check: a shell command run in the workspace root. */
 export interface CheckCommand {
@@ -34,10 +39,21 @@ export function scopeChecks(checks: CheckCommand[], changed: string[]): CheckCom
   });
 }
 
-/** How many times failing checks may send the agent back to fix them in one turn. */
+/** How many times failing checks may send the agent back to fix them in one turn, at the default (medium) effort. */
 export const MAX_CHECK_ROUNDS = 2;
+/** Fix rounds per effort level: more effort, more attempts to get the checks passing. */
+export function checkRoundsFor(effort: Effort): number {
+  return effort === 'low' ? 1 : effort === 'high' ? 3 : effort === 'max' ? 4 : MAX_CHECK_ROUNDS;
+}
 /** How much of a failing check's output goes back to the model. */
 export const CHECK_OUTPUT_CHARS = 8000;
+
+/** The message that sends a failing check (its digest) back to the model. */
+export function checkFailureMessage(digest: string, round: number, rounds: number): string {
+  return `The project checks failed after your changes (automatic check ${round} of ${rounds}). Read the output, fix the root cause, and do not finish until the checks pass. If the failure is unrelated to your change (it was already failing before), say so instead of changing unrelated code.
+
+${digest}`;
+}
 
 export function checksPromptSection(checks: CheckCommand[]): string {
   if (!checks.length) { return ''; }
