@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.31.1 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.31.2 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -21,6 +21,15 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.31.2: find your messages faster, and no more endless repeats
+- Press the Up arrow in the message box to bring back a message you sent before (Down goes forward
+  again). Nothing is sent until you press Enter, so you can change it first.
+- The clock button at the top of a session lists every message you sent, with its time. Click one
+  (or type to filter) and the chat scrolls straight to it.
+- Successful file edits show a pen icon instead of a tick, so changes stand out from reads.
+- When the model keeps repeating the same tool call after two reminders, the call is no longer run,
+  and the agent stops and tells you, instead of looping until it runs out of steps.
 
 New in 0.31.1: clearer chat and a working Compact button
 - Your message now stays pinned at the top of the chat while you scroll through that turn's work.

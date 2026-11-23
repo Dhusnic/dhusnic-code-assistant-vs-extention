@@ -1,8 +1,12 @@
 Hi team 👋
 
-Infraon Code Assistant 0.31.1 is out: a clearer chat view 💬
+Infraon Code Assistant 0.31.2 is out: a clearer chat that's easier to navigate 💬
 
 🆕 What's new
+• Press ↑ in the message box to bring back a message you sent before (↓ goes forward). Edit it, then press Enter
+• New 🕒 clock button at the top of a session: lists every message you sent with its time. Click one and the chat jumps to it
+• File edits now show a ✎ pen instead of a ✓, so changes stand out from reads
+• No more endless loops: if the model keeps repeating the same command after two reminders, it is stopped and tells you
 • Your message stays pinned at the top of the chat while you scroll through the agent's work
 • Replies, tool calls and approvals now sit on a timeline, with a status dot for each step (running, done, failed, waiting for you)
 • Compact (click the context ring, or /compact) now works while the agent is busy: it runs before the next step instead of showing an error
