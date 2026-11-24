@@ -6,7 +6,7 @@ import type { Hub, SidebarSink } from './hub';
 import { FieldError, LinuxInput, checkLinux, validateServerName } from './features/servers';
 import type { SshTarget } from '../core/ssh';
 
-/** Activity-bar view: LLM status and usage, and the session manager (all sessions, live agent activity). */
+/** Activity-bar view: LLM status and usage, the session manager (all sessions, live agent activity), and the Updates section. */
 export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
   private view?: vscode.WebviewView;
   private healthTimer?: NodeJS.Timeout;
@@ -36,6 +36,11 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
   }
 
   post(m: unknown): void { void this.view?.webview.postMessage(m); }
+
+  /** Sends the updater's current status to the Updates section; later changes are pushed by extension.ts. */
+  private async postUpdates(): Promise<void> {
+    try { this.post({ type: 'updates', status: await vscode.commands.executeCommand('infraonAssistant.updates.status') }); } catch { /* the section keeps its last state */ }
+  }
 
   refresh(): void {
     if (!this.view?.visible) { return; }
@@ -124,8 +129,13 @@ export class SidebarView implements vscode.WebviewViewProvider, SidebarSink {
     switch (m.type) {
       case '__probeResult': hub.resolveProbe(m.id, m.result); return;
       case '__error': hub.logWebviewError('sidebar', m); return;
-      case 'ready': this.refresh(); void hub.checkHealth(); void hub.ensureMcp(); break;
-      case 'refresh': await hub.checkHealth(true); this.refresh(); break;
+      case 'ready': this.refresh(); void hub.checkHealth(); void hub.ensureMcp(); void this.postUpdates(); break;
+      case 'refresh': await hub.checkHealth(true); this.refresh(); void this.postUpdates(); break;
+      // The updater lives in extension.ts (it runs without the hub); its internal commands are the way to it.
+      case 'updateAction':
+        await vscode.commands.executeCommand('infraonAssistant.updates.act', String(m.action ?? ''), typeof m.setting === 'string' ? m.setting : undefined);
+        void this.postUpdates();
+        break;
       case 'newSession': await hub.newSession(); break;
       case 'openSession': await hub.openSession(String(m.id)); break;
       case 'deleteSession': await hub.deleteSession(String(m.id)); break;

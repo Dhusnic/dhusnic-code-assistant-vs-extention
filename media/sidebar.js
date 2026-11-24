@@ -1,4 +1,4 @@
-/* Infraon sidebar: LLM status/usage + session manager with live agent activity. */
+/* Infraon sidebar: LLM status/usage, session manager with live agent activity, skills, servers, updates (version, last check, install/reload, problems with fixes) and storage check. */
 (function () {
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
@@ -127,6 +127,50 @@
       <div class="vline">${r.items.length} saved session${r.items.length === 1 ? '' : 's'}: <b class="okc">${counts.ok} ok</b>${counts.repaired ? `, <b class="warn">${counts.repaired} repaired</b>` : ''}${counts.corrupt ? `, <b class="bad">${counts.corrupt} unreadable</b>` : ''}</div>
       ${r.items.filter((i) => i.status !== 'ok').map((i) => `<div class="vitem ${i.status}"><b>${esc(i.title)}</b> — ${i.status}<ul>${i.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`).join('')}`;
   }
+
+  /* ---------- updates (status from host/updater.ts, see core/updateStatus.ts) ---------- */
+  const UPD_TEXT = {
+    idle: () => 'Not checked yet',
+    checking: () => 'Checking…',
+    upToDate: () => 'Up to date',
+    unpublished: () => 'No release published yet',
+    available: (s) => `Version ${s.latest} is available`,
+    installing: (s) => `Installing ${s.latest}…`,
+    installed: (s) => `${s.latest} installed: reload to use it`,
+    incompatible: (s) => `${s.latest} needs a newer VS Code`,
+    disabled: () => 'Turned off by your organization',
+    busy: () => 'Another window is installing',
+    error: (s) => (s.problem ? s.problem.title : 'Update check failed'),
+  };
+  const UPD_DOT = { upToDate: 'ok', unpublished: 'ok', available: 'warn', installed: 'warn', incompatible: 'warn', busy: 'warn', error: 'bad' };
+  let updActions = [];
+  function renderUpdates(s) {
+    const busy = s.state === 'checking' || s.state === 'installing';
+    // Buttons: the step the update is waiting for first, then the fixes for a problem, then a fresh check.
+    updActions = [];
+    if (s.state === 'available') { updActions.push({ action: 'install', label: `Install ${s.latest}`, primary: true }); }
+    if (s.state === 'installed') { updActions.push({ action: 'reload', label: 'Reload now', primary: true }); }
+    if (s.problem) { s.problem.fixes.forEach((f, i) => { if (f.action !== 'retry') { updActions.push({ ...f, primary: i === 0 }); } }); }
+    if (!busy && s.state !== 'installed' && s.state !== 'disabled') { updActions.push({ action: 'retry', label: s.state === 'error' ? 'Try again' : 'Check now' }); }
+    if (s.state === 'error' || s.state === 'incompatible' || s.state === 'busy') { updActions.push({ action: 'showLog', label: 'Show log' }); }
+    const checked = s.checkedAt ? (ago(s.checkedAt) === 'now' ? 'just now' : `${ago(s.checkedAt)} ago`) : 'never';
+    const p = s.problem;
+    $('updates').innerHTML = `
+      <div class="kv"><span>Installed</span><b>${esc(s.current)}</b></div>
+      <div class="kv"><span>Status</span><b title="${esc(UPD_TEXT[s.state] ? UPD_TEXT[s.state](s) : s.state)}"><span class="hdot ${UPD_DOT[s.state] || 'unknown'}"></span>${esc(UPD_TEXT[s.state] ? UPD_TEXT[s.state](s) : s.state)}</b></div>
+      ${s.latest && s.state === 'upToDate' && s.latest !== s.current ? `<div class="kv small"><span>On the server</span><b>${esc(s.latest)}</b></div>` : ''}
+      <div class="kv small"><span>Last checked</span><b>${esc(checked)}</b></div>
+      <div class="kv small"><span>Install automatically</span><b><a href="#" id="updAuto" title="Open the setting">${s.autoUpdate ? 'on' : 'off'}</a></b></div>
+      ${s.notes && (s.state === 'available' || s.state === 'installed' || s.state === 'installing') ? `<div class="muted small">${s.mandatory ? '<b>Required update.</b> ' : ''}${esc(s.notes)}</div>` : ''}
+      ${p ? `<div class="err" role="alert"><b>${esc(p.title)}</b><br>${esc(p.detail)}${s.state === 'error' ? `<div class="muted small">Details: ${esc(p.raw)}</div>` : ''}</div>` : ''}
+      <div class="row-btns upd-btns">${updActions.map((a, i) => `<button class="btn ${a.primary ? '' : 'sec'}" data-upd="${i}"${busy ? ' disabled' : ''}>${esc(a.label)}</button>`).join(' ')}${busy ? '<span class="muted small">Working…</span>' : ''}</div>`;
+  }
+  $('updates').addEventListener('click', (e) => {
+    if (e.target.id === 'updAuto') { e.preventDefault(); post({ type: 'updateAction', action: 'openSetting', setting: 'infraonAssistant.autoUpdate' }); return; }
+    const b = e.target.closest('[data-upd]');
+    const a = b && updActions[Number(b.dataset.upd)];
+    if (a) { b.disabled = true; post({ type: 'updateAction', action: a.action, setting: a.setting }); }
+  });
 
   /* ---------- skills ---------- */
   function renderSkillList() {
@@ -270,6 +314,7 @@
     else if (m.type === 'verifyResult') { renderVerify(m); }
     else if (m.type === 'serverResult') { onServerResult(m); }
     else if (m.type === 'serverTest') { onServerTest(m); }
+    else if (m.type === 'updates' && m.status) { renderUpdates(m.status); }
   });
   setInterval(() => { if (data.sessions.some((s) => s.agents.some((a) => a.startedAt))) { renderSessions(); } }, 1000);
   post({ type: 'ready' });

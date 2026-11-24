@@ -200,6 +200,7 @@ body.sidebar #hdr { position: sticky; top: 0; background: var(--vscode-sideBar-b
 .tag { font-size: 10.5px; padding: 0 6px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .tag.error { background: var(--vscode-errorForeground); }
 .row-btns { margin-top: 6px; }
+.upd-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .link { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); cursor: pointer; font-size: 12px; }
 .newsess { width: 100%; text-align: left; background: none; border: 0; padding: 6px 2px; font-size: 13px; font-weight: 600; }
 .newsess:hover { color: var(--vscode-textLink-foreground); }

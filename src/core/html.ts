@@ -70,7 +70,7 @@ ${scripts(p)}
 </body></html>`;
 }
 
-/** Activity-bar view: LLM status/usage + the session manager. */
+/** Activity-bar view: LLM status/usage, the session manager, skills, servers, updates and the storage check. */
 export function buildSidebarHtml(p: HtmlParts): string {
   const logo = p.logoSvg.replace('<svg ', '<svg class="logo" ');
   return `${head(p)}<body class="sidebar">
@@ -89,6 +89,7 @@ export function buildSidebarHtml(p: HtmlParts): string {
   <div class="sk-sbar"><button class="link" id="addServerBtn">＋ Add server</button></div>
   <div id="serverList"></div>
 </div></section>
+<section id="updSec" class="sec open"><h3 class="sec-h" data-sec="updSec">Updates</h3><div class="sec-b" id="updates"><div class="muted">Loading…</div></div></section>
 <section id="storeSec" class="sec"><h3 class="sec-h" data-sec="storeSec">Storage</h3><div class="sec-b">
   <p class="muted">Checks that every saved session can be read back, repairs what it can, and runs a write → read → compare self-test.</p>
   <button class="btn sec-btn" id="verifyBtn">Check storage</button><div id="verify"></div></div></section>

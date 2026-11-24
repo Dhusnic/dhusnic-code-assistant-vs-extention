@@ -122,8 +122,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const getUpdater = async (): Promise<Updater> => {
     if (!updater) {
       const { Updater: U } = await import('./updater');
-      updater ??= new U(context, agentsBusy);
-      context.subscriptions.push(updater);
+      if (!updater) {
+        updater = new U(context, agentsBusy);
+        // The sidebar's Updates section follows every step (it is only told when the hub has loaded it).
+        context.subscriptions.push(updater, updater.onDidChange((status) => loaded?.sidebar.post({ type: 'updates', status })));
+      }
     }
     return updater;
   };
@@ -132,7 +135,16 @@ export function activate(context: vscode.ExtensionContext): void {
     updateTimer.unref?.();
     context.subscriptions.push({ dispose: () => clearTimeout(updateTimer) });
   }
-  context.subscriptions.push(vscode.commands.registerCommand('infraonAssistant.checkForUpdates', async () => (await getUpdater()).check(true)));
+  context.subscriptions.push(
+    vscode.commands.registerCommand('infraonAssistant.checkForUpdates', async () => (await getUpdater()).check(true)),
+    // Internal (not in the command palette): the sidebar's Updates section reads the status and runs its buttons.
+    vscode.commands.registerCommand('infraonAssistant.updates.status', async () => (await getUpdater()).status),
+    vscode.commands.registerCommand('infraonAssistant.updates.act', async (action: unknown, setting: unknown) => {
+      const actions = ['retry', 'install', 'reload', 'openSetting', 'updateVscode', 'showLog'] as const;
+      const a = actions.find((x) => x === action);
+      if (a) { await (await getUpdater()).act({ action: a, setting: typeof setting === 'string' ? setting : undefined }); }
+    }),
+  );
   // The scheduler loads only in workspaces that actually have scheduled tasks.
   if (context.storageUri) {
     const timer = setTimeout(() => {
