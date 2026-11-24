@@ -11,6 +11,8 @@
  *   loopGuard.ts       notices the model repeating itself within a turn, and the reminders that nudge it out
  *   selfReview.ts      the once-per-turn fresh-context review of the turn's diff before a turn that changed files ends
  *   planFirst.ts       holds the turn's first file change until the model has written a task list (once per turn)
+ *   diagnosis.ts       on a bug fix, holds source changes until record_diagnosis proves the root cause; the reproduction
+ *                      then becomes a check that must pass before the turn ends
  */
 import { ChatMessage, StreamResult, ToolCall, ToolSpec } from './llm';
 import { contextLimitFromError, isContextLengthError } from './modelInfo';
@@ -30,6 +32,7 @@ import { EDIT_STAT_TOOLS } from './editStats';
 import { AgentDeps, AgentUi, ApprovalRequest, QueuedInput, RunOptions, ToolRequest } from './agentContracts';
 import { selfReview, shouldSelfReview } from './selfReview';
 import { PlanFirstGate, planFirstActive, planFirstMessage } from './planFirst';
+import { DIAGNOSE_FIRST_REMINDER, DIAGNOSIS_SPEC, DIAGNOSIS_TOOL, DiagnosisState, MAX_HOLDS, evaluateDiagnosis, holdMessage, isReproductionPath, looksLikeBugReport, reproCheck, verdictMessage } from './diagnosis';
 import { CHECK_OUTPUT_CHARS, CheckCommand, DOC_FILE, NOT_RUN, checkFailureMessage, checkLabel, checkRoundsFor, checksPromptSection, digestCheckOutput, exitCodeOf, narrowCheck, narrowedLabel, sameDigest, scopeChecks } from './checks';
 import { findTestFiles } from './verify';
 import {
@@ -95,9 +98,12 @@ export class Agent {
   markExternalChanges(paths: string[]): void { for (const p of paths) { this.pendingExternal.add(p); } }
   private takePending(): string[] { const out = [...this.pendingExternal]; this.pendingExternal.clear(); return out; }
 
+  /** The bug fix in progress, when diagnose-first locks source edits (diagnosis.ts); may span turns. */
+  private diag?: DiagnosisState;
+
   constructor(protected deps: AgentDeps) {}
 
-  reset(): void { this.cancel(); this.history = []; this.turnStarts = []; this.reads.clear(); }
+  reset(): void { this.cancel(); this.history = []; this.turnStarts = []; this.reads.clear(); this.diag = undefined; }
   cancel(): void { this.abort?.abort(); }
 
   /**
@@ -303,6 +309,7 @@ export class Agent {
     this.turnStarts = [...state.turnStarts];
     // Files may have changed while the session was closed: everything must be read again before it is edited.
     this.reads.clear();
+    this.diag = undefined;
     this.closeDanglingToolCalls();
   }
 
@@ -313,6 +320,7 @@ export class Agent {
     const files = (await this.deps.restore?.(turn)) ?? [];
     this.history.length = this.turnStarts[turn];
     this.turnStarts.length = turn;
+    this.diag = undefined;
     return files;
   }
 
@@ -328,7 +336,9 @@ export class Agent {
       QUESTION_SPEC,
     ];
     const skill = this.deps.skills ? skillToolSpec(this.deps.skills()) : undefined;
-    return [...specs, TODO_SPEC, ...(skill ? [skill] : []), ...delegation, ...(mode === 'plan' ? [PLAN_SPEC] : [])];
+    // Offered only during a bug fix, so other requests do not pay for its definition.
+    const diagnosis = this.diag && !this.deps.subagent ? [DIAGNOSIS_SPEC] : [];
+    return [...specs, TODO_SPEC, ...diagnosis, ...(skill ? [skill] : []), ...delegation, ...(mode === 'plan' ? [PLAN_SPEC] : [])];
   }
 
   /** `display` is the text shown in the UI when `userText` was expanded (e.g. @file attachments). */
@@ -338,7 +348,9 @@ export class Agent {
     // The active file goes with the message, not into the system prompt: a system prompt that changes whenever the
     // user switches tabs defeats the server's prefix cache, so every request would re-process the whole conversation.
     const active = this.deps.activeFile?.();
-    const content = active ? `${userText}\n\n(Active editor file: ${active})` : userText;
+    this.startDiagnosis(display ?? userText);
+    const lockNote = this.diag && !this.diag.unlocked ? `\n\n${DIAGNOSE_FIRST_REMINDER}` : '';
+    const content = `${userText}${active ? `\n\n(Active editor file: ${active})` : ''}${lockNote}`;
     const shown = display ?? (content !== userText ? userText : undefined);
     this.history.push({ role: 'user', content, ...(shown && shown !== content ? { display: shown } : {}), at: Date.now() });
     this.abort = new AbortController();
@@ -361,6 +373,7 @@ export class Agent {
     /** Notices the model repeating itself (same call, failing edits or commands) and nudges it; reset per turn. */
     const loop = new LoopGuard();
     let reviewed = false;
+    let reproNudged = false;
     /** Holds the turn's first file change until a task list exists (planFirst.ts); the setting is read once per turn. */
     const planFirstSetting = this.deps.planFirst?.();
     const planFirstOn = (): boolean => planFirstActive(planFirstSetting, run.effort, run.mode, !!this.deps.subagent);
@@ -457,10 +470,14 @@ export class Agent {
           if (this.hasQueued()) { continue; }
           // A project created during this turn (no package.json etc. when it started) gets its checks detected now.
           if (dirty && !checks.length) { checks = await this.loadChecks(); }
-          const scoped = dirty ? scopeChecks(checks, [...this.track.changed]) : [];
-          if (dirty && checks.length && !scoped.length) { dirty = false; ui.info('Only documentation changed: project checks skipped.'); }
+          const changedNow = [...this.track.changed];
+          // A reproduction that failed before the fix must pass now; it goes first, as the most direct evidence.
+          const repro = this.reproToRun();
+          const withRepro = repro && scopeChecks([repro], changedNow).length ? [repro, ...checks] : checks;
+          const scoped = dirty ? scopeChecks(withRepro, changedNow) : [];
+          if (dirty && withRepro.length && !scoped.length) { dirty = false; ui.info('Only documentation changed: project checks skipped.'); }
           // The model already ran every check after its last change and they passed: no need to run them again.
-          if (dirty && this.alreadyVerified(checks)) { dirty = false; }
+          if (dirty && this.alreadyVerified(withRepro)) { dirty = false; }
           /** Checks still failing after the last allowed fix attempt: a review of that diff would only add noise. */
           let checksUnresolved = false;
           if (dirty && scoped.length && run.mode !== 'plan' && this.toolFor('run_command')) {
@@ -500,6 +517,12 @@ export class Agent {
                 : `Project checks are still failing (${failed.name}: ${failed.command}) after ${maxCheckRounds} fix attempts. Review the output above.`);
             }
           }
+          // A reproduction whose bug shows only in its output: the model must run it again after its last change.
+          if (!reproNudged && this.diag?.unlocked && this.diag.repro && !this.diag.repro.failedBefore && this.track.changed.size && !this.ranAfterLastChange(this.diag.repro.command)) {
+            reproNudged = true;
+            this.history.push({ role: 'user', content: `Before you finish: run the reproduction \`${this.diag.repro.command}\` again with run_command and confirm from its output that the bug is gone. If it is not, the diagnosis was wrong: investigate again.`, display: 'Asked to re-run the reproduction' });
+            continue;
+          }
           // Once per turn that changed files: a fresh-context review of the diff; issues go back to the model (selfReview.ts).
           if (!reviewed && !checksUnresolved && shouldSelfReview(this.deps.selfReview?.(), run.effort, run.mode, !!this.deps.subagent, this.track.abs.size)) {
             reviewed = true;
@@ -516,26 +539,36 @@ export class Agent {
             }
           }
           const stop = await this.deps.guard?.onStop?.(signal);
-          if (!stop?.blocked || stopContinues >= MAX_STOP_CONTINUES) { this.reportVerification(ui); return; }
+          if (!stop?.blocked || stopContinues >= MAX_STOP_CONTINUES) { this.settleDiagnosis(); this.reportVerification(ui); return; }
           stopContinues++;
           this.history.push({ role: 'user', content: `A Stop hook asked you to continue: ${stop.reason ?? 'the task is not finished'}`, display: 'Stop hook: continue' });
           continue;
         }
         // Plan first: the turn's first file-changing calls are held (not run) until a task list exists (planFirst.ts).
+        // A call that diagnose-first locks is left to that lock (decided when the call runs, since a record_diagnosis
+        // earlier in the same response may unlock it), so it does not use up the plan-first gate.
         const before = this.history.slice(this.turnStarts[turn], this.history.length - 1);
         const held = new Set<string>();
         res.toolCalls.forEach((tc, j) => {
           const tool = this.toolFor(tc.function.name);
-          const isEdit = tool?.kind === 'edit' && isAllowed(this.syncMode(run), tool.kind);
+          const isEdit = tool?.kind === 'edit' && isAllowed(this.syncMode(run), tool.kind) && !this.diagnosisBlocks(tc);
           if (planGate.shouldHold(isEdit, before, res.toolCalls.slice(0, j))) { held.add(tc.id); }
         });
         planGate.endRound();
         if (held.size) { ui.info('Plan first: the agent was asked to write a task list before changing files.'); }
         // A call the loop guard already escalated is refused instead of run again (loopGuard.ts).
         const refused = new Set(res.toolCalls.filter((tc) => !held.has(tc.id) && loop.blocks(tc.function.name, tc.function.arguments)).map((tc) => tc.id));
-        const exec = (tc: ToolCall) => (held.has(tc.id) ? Promise.resolve(this.holdForPlan(tc, ui))
-          : refused.has(tc.id) ? Promise.resolve(loop.block(tc.function.name))
-            : this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn));
+        const diagHeld = new Set<string>();
+        const exec = (tc: ToolCall) => {
+          if (held.has(tc.id)) { return Promise.resolve(this.holdForPlan(tc, ui)); }
+          if (!refused.has(tc.id) && this.diagnosisBlocks(tc)) {
+            diagHeld.add(tc.id);
+            held.add(tc.id);
+            return Promise.resolve(this.holdForDiagnosis(tc, ui));
+          }
+          return refused.has(tc.id) ? Promise.resolve(loop.block(tc.function.name))
+            : this.execTool(tc.id, tc.function.name, tc.function.arguments, run, ui, signal, turn);
+        };
         for (const batch of planBatches(res.toolCalls, (tc) => this.parallelSafe(tc, run.mode), MAX_PARALLEL_TOOLS)) {
           // Changes from before this batch (the user typing, a background agent) are not this batch's doing.
           if (feed) { cursor = feed.cursor(); }
@@ -548,12 +581,22 @@ export class Agent {
             // A held or refused call did not run: it is neither a failure or repeat for the loop guard nor a change.
             if (held.has(tc.id) || refused.has(tc.id)) { this.history.push({ role: 'tool', tool_call_id: tc.id, content: results[j] }); return; }
             const loopNudge = loop.observe(tc.function.name, tc.function.arguments, results[j], this.toolFor(tc.function.name)?.kind);
-            this.history.push({ role: 'tool', tool_call_id: tc.id, content: withNudge(results[j], loopNudge, (t) => ui.info(t)) });
+            const lockNote = this.noteDiagnosisRun(tc, results[j], external);
+            this.history.push({ role: 'tool', tool_call_id: tc.id, content: withNudge(results[j] + lockNote, loopNudge, (t) => ui.info(t)) });
             // A command that changed files (a formatter, a code generator) is a change, not a check.
             if (this.noteResult(tc.function.name, tc.function.arguments, results[j], external.length > 0)) { dirty = true; }
           });
         }
         toolRounds++;
+        if (diagHeld.size && this.diag) {
+          this.diag.holds++;
+          ui.info('Diagnose first: source changes are held until the agent proves the root cause of the bug.');
+          if (this.diag.holds >= MAX_HOLDS) {
+            ui.info(`Stopped: the agent tried to change code ${this.diag.holds} times without proving the root cause. Give it more detail (steps to reproduce, expected behaviour, logs) and send your message to continue, or turn off infraonAssistant.diagnoseFirst.`);
+            this.reportVerification(ui);
+            return;
+          }
+        }
         // The task list went stale (many rounds without todo_write): remind the model inside the last tool result.
         const nudge = [this.todoNudge(), withNudge('', loop.endRound(), (t) => ui.info(t)).trim()].filter(Boolean).join('\n\n');
         if (nudge) {
@@ -576,6 +619,7 @@ export class Agent {
         openSteps = todos ? unfinishedTodos(todos).length : 0;
         if (todos && openSteps && last?.role === 'tool') { last.content = `${last.content ?? ''}\n\n<system-reminder>${todoEndReminder(todos)}</system-reminder>`; }
       }
+      this.settleDiagnosis();
       ui.info(`Stopped after ${ep.maxIterations} tool rounds${openSteps ? ` with ${openSteps} task step${openSteps === 1 ? '' : 's'} still open` : ''}. Send "continue" to let the agent carry on (or raise Max Iterations in settings).`);
       this.reportVerification(ui);
     } catch (e: any) {
@@ -851,6 +895,91 @@ export class Agent {
     return todoReminder(todos, rounds);
   }
 
+  /**
+   * Decides at the start of a turn whether diagnose-first applies (diagnosis.ts): a new bug report starts a fresh lock;
+   * a lock whose bug is not proven fixed carries into the next few turns; otherwise there is none. `typed`: the user's text.
+   */
+  private startDiagnosis(typed: string): void {
+    const setting = this.deps.subagent ? undefined : this.deps.diagnoseFirst?.();
+    if (!setting || setting === 'off') { this.diag = undefined; return; }
+    if (looksLikeBugReport(typed)) { this.diag = new DiagnosisState(); return; }
+    if (this.diag && !this.diag.carryOver(typed)) { this.diag = undefined; }
+  }
+
+  /** Whether diagnose-first holds this call: a source-file change, or a sub-agent that can write, before the diagnosis. */
+  private diagnosisBlocks(tc: ToolCall): boolean {
+    const d = this.diag;
+    if (!d || d.unlocked) { return false; }
+    let args: any = {};
+    try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* an edit with broken arguments is still held */ }
+    if (tc.function.name === AGENT_TOOL) {
+      const name = typeof args.subagent_type === 'string' && args.subagent_type.trim() ? args.subagent_type.trim() : DEFAULT_AGENT_TYPE;
+      const type = (this.deps.agentTypes?.() ?? BUILTIN_AGENT_TYPES).find((t) => t.name === name);
+      return d.blocks({ args, isAgentLaunch: true, readOnlyAgent: !!type?.readOnly });
+    }
+    return d.blocks({ name: tc.function.name, kind: this.toolFor(tc.function.name)?.kind, args });
+  }
+
+  /** A change held by diagnose-first: shown as not run, and the model is told what is missing. */
+  private holdForDiagnosis(tc: ToolCall, ui: AgentUi): string {
+    const tool = this.toolFor(tc.function.name);
+    let detail = tc.function.name;
+    try { detail = relativizePaths(tool?.describe(JSON.parse(tc.function.arguments || '{}')) ?? detail, this.deps.root); } catch { /* keep the name */ }
+    ui.toolStart(tc.id, tc.function.name, tool?.kind ?? 'edit', tc.function.arguments, detail);
+    ui.toolEnd(tc.id, false, 'Not run yet: diagnose first (prove the root cause, then change code)');
+    return holdMessage(tc.function.name, (this.diag?.holds ?? 0) + 1, this.diag?.lastProblem);
+  }
+
+  /**
+   * Records a finished run_command for the diagnosis (which reproductions really ran, and how they exited). Returns a
+   * note for its result when the command changed source files while they are locked: commands must not get around it.
+   */
+  private noteDiagnosisRun(tc: ToolCall, result: string, external: string[]): string {
+    const d = this.diag;
+    if (!d || tc.function.name !== 'run_command' || /^(ERROR|DENIED|BLOCKED)/.test(result)) { return ''; }
+    let command = '';
+    try { command = String(JSON.parse(tc.function.arguments || '{}').command ?? ''); } catch { return ''; }
+    if (!command.trim()) { return ''; }
+    d.noteRun(command, exitCodeOf(result));
+    const source = external.map((p) => this.displayPath(p)).filter((p) => !isReproductionPath(p));
+    if (d.unlocked || !source.length) { return ''; }
+    return `\n\nNOTE (diagnose first): this command changed ${source.slice(0, 5).join(', ')} while source files are locked. Do not change code through commands before ${DIAGNOSIS_TOOL} is accepted; if that was not intended, undo it.`;
+  }
+
+  /** record_diagnosis: checks the diagnosis against this session and unlocks source changes when it holds up. */
+  private async execDiagnosis(id: string, rawArgs: string, ui: AgentUi): Promise<string> {
+    ui.toolStart(id, DIAGNOSIS_TOOL, 'meta', rawArgs, 'Recorded the diagnosis');
+    const finish = (ok: boolean, text: string): string => { ui.toolEnd(id, ok, text.slice(0, 4000)); return text; };
+    const d = this.diag;
+    if (!d || this.deps.subagent) { return finish(false, 'ERROR: no bug fix is in progress, so there is nothing to unlock. Continue the task.'); }
+    let args: unknown = {};
+    try { args = JSON.parse(rawArgs || '{}'); } catch { return finish(false, `ERROR: the arguments were not valid JSON. Call ${DIAGNOSIS_TOOL} again.`); }
+    const verdict = await evaluateDiagnosis(args, {
+      root: this.deps.root, roots: this.deps.roots?.(), wasRead: (abs) => this.reads.has(abs), runs: d.runs, userConsulted: d.userConsulted,
+    });
+    d.apply(verdict);
+    if (verdict.status === 'accepted') { ui.info('Root cause recorded: source changes are unlocked.'); }
+    return finish(verdict.status === 'accepted', verdictMessage(verdict));
+  }
+
+  /** The reproduction as a check, while it failed before the fix: it must pass now. */
+  private reproToRun(): CheckCommand | undefined {
+    const d = this.diag;
+    return d?.unlocked && d.repro?.failedBefore && !this.deps.subagent ? reproCheck(d.repro.command) : undefined;
+  }
+
+  /** Whether this command ran (and, with mustPass, passed) after the latest change: every change resets the evidence. */
+  private ranAfterLastChange(command: string, mustPass = false): boolean {
+    return this.track.verified.some((v) => v.label === checkLabel(command) && (!mustPass || v.ok));
+  }
+
+  /** End of a turn: the bug is shown fixed when its reproduction ran (and, if it failed before, passed) after the last change. */
+  private settleDiagnosis(): void {
+    const d = this.diag;
+    if (!d?.unlocked || !d.repro || !this.track.changed.size) { return; }
+    if (this.ranAfterLastChange(d.repro.command, d.repro.failedBefore)) { d.verified = true; }
+  }
+
   /** A file change held by plan-first: shown as not run, and the model is told to write its task list first. */
   private holdForPlan(tc: ToolCall, ui: AgentUi): string {
     const tool = this.toolFor(tc.function.name);
@@ -889,6 +1018,7 @@ export class Agent {
       if (e.message === 'Cancelled') { ui.toolEnd(id, false, 'Cancelled'); }
       throw e;
     }
+    if (answers && this.diag) { this.diag.userConsulted = true; }
     return finish(!!answers, formatAnswers(v.questions, answers));
   }
 
@@ -939,6 +1069,7 @@ export class Agent {
     if (name === SEND_TOOL) { return this.execSend(id, rawArgs, ui); }
     if (name === QUESTION_TOOL) { return this.execQuestion(id, rawArgs, ui, signal); }
     if (name === TODO_TOOL) { return this.execTodo(id, rawArgs, ui); }
+    if (name === DIAGNOSIS_TOOL) { return this.execDiagnosis(id, rawArgs, ui); }
     if (name === SKILL_TOOL && this.deps.skills) { return this.execSkill(id, rawArgs, ui); }
     const tool = this.toolFor(name);
     if (!tool) { ui.toolStart(id, name, 'exec', rawArgs, name); ui.toolEnd(id, false, `unknown tool ${name}`); return `ERROR: unknown tool ${name}`; }

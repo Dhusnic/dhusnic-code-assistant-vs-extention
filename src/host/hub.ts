@@ -6,6 +6,7 @@ import { Agent, CheckCommand, DELEGATION_TOOLS, relatedTestsFor } from '../core/
 import { detectVerifyCommands } from '../core/verify';
 import { parseSelfReviewSetting } from '../core/selfReview';
 import { parsePlanFirstSetting } from '../core/planFirst';
+import { parseDiagnoseFirstSetting } from '../core/diagnosis';
 import { AgentType, BUILTIN_AGENT_TYPES, loadAgentTypes, toolsForType } from '../core/agentTypes';
 import { NewSkill, Skill, addSkillFile, copySkill, createSkill, deleteSkill, findSkill, lintSkill, loadSkills, setModelInvocation, updateSkill } from '../core/skills';
 import { CheckpointStore } from '../core/checkpoints';
@@ -541,6 +542,7 @@ export class Hub {
       restore: (turn) => checkpoints.restore(turn),
       selfReview: sub ? undefined : () => parseSelfReviewSetting(this.cfg.get<string>('selfReview', 'high')),
       planFirst: sub ? undefined : () => parsePlanFirstSetting(this.cfg.get<string>('planFirst', 'max')),
+      diagnoseFirst: sub ? undefined : () => parseDiagnoseFirstSetting(this.cfg.get<string>('diagnoseFirst', 'auto')),
       original: (turn, abs) => checkpoints.originalIn(turn, abs),
       contextLimit: () => this.contextWindow(),
       compactRatio: () => this.cfg.get<number>('autoCompactThreshold', 0.75),

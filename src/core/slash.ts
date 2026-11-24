@@ -65,7 +65,7 @@ export function fixPrompt(args: string): string {
 
 Work in these steps and track them with todo_write:
 1. Find the cause: locate the relevant code and existing tests (glob_files, grep, find_references). Find how this project runs its tests.
-2. Reproduce: add a focused test (next to the existing tests, in their style) that fails because of this bug. Run ONLY that test and confirm it fails for the reason described, not for an unrelated error. If the project has no test setup, write the smallest script that shows the bug instead, and say so.
+2. Reproduce: add a focused test (next to the existing tests, in their style) that fails because of this bug. Run ONLY that test and confirm it fails for the reason described, not for an unrelated error. If the project has no test setup, write the smallest script that shows the bug instead, and say so. When the record_diagnosis tool is offered, record the root cause with it now: source files stay locked until it is accepted.
 3. Fix the root cause with the smallest change. Do not change the test to make it pass.
 4. Prove it: run the new test (it must pass now), then the related test files, then the project's checks.
 5. Report: the cause (file:line), the fix, the test you added, and the test results before and after.`;

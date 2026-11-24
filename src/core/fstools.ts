@@ -208,6 +208,8 @@ export class FileReadTracker implements ReadTracker {
   }
   async markRead(abs: string): Promise<void> { const s = await this.stamp(abs); if (s) { this.seen.set(this.key(abs), s); } }
   async markWritten(abs: string): Promise<void> { return this.markRead(abs); }
+  /** Whether the file was read (or written) in this session, whatever happened to it since. */
+  has(abs: string): boolean { return this.seen.has(this.key(abs)); }
   async check(abs: string, display: string): Promise<string | undefined> {
     const now = await this.stamp(abs);
     if (!now) { return undefined; }

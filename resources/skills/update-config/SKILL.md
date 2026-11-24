@@ -58,6 +58,7 @@ Names, types and defaults come from this extension's `package.json`; confirm the
 |---|---|---|
 | `infraonAssistant.autoApprove` | boolean | Skip approval prompts for edits and commands (default false, not recommended). |
 | `infraonAssistant.planFirst` | string: `off`, `max`, `always` | Write a plan before the first edit. |
+| `infraonAssistant.diagnoseFirst` | string: `auto`, `off` | On a bug fix, hold source edits until the root cause is proven with `record_diagnosis` (default auto). |
 | `infraonAssistant.selfReview` | string: `off`, `high`, `always` | Have the model review its own diff before finishing. |
 | `infraonAssistant.autoVerify` | boolean | Run project checks after changes (default true). |
 | `infraonAssistant.verifyCommands` | array of strings | Checks to run in order, e.g. `["npm run lint", "npm test"]`. |

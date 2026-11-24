@@ -383,6 +383,20 @@
                         "description": "Plan before editing: the first time in a request that the agent tries to change a file without having written a task list, that change is held (not run) and the agent is asked to read the files involved and write the plan with todo_write first. Happens at most once per request; questions and read-only work are unaffected; not in plan mode or for sub-agents.",
                         "order": 0
                     },
+                    "infraonAssistant.diagnoseFirst": {
+                        "type": "string",
+                        "enum": [
+                            "auto",
+                            "off"
+                        ],
+                        "enumDescriptions": [
+                            "Lock source edits on bug-fix requests until the root cause is proven (default).",
+                            "Never lock edits for a diagnosis."
+                        ],
+                        "default": "auto",
+                        "description": "Diagnose before fixing: on a bug-fix request (\"fix the crash on save\", a stack trace, \"X is not working\", /fix), source-file changes are held until the agent records the root cause with record_diagnosis. The diagnosis is checked: its file:line evidence must come from files the agent read, and its reproduction must really have been run (a failing test must have failed). Only high confidence unlocks edits, or medium after you answered the agent's question. Test files and repro scripts can be written before. After the fix, a reproduction that failed must pass before the request may finish. Not for sub-agents.",
+                        "order": 0
+                    },
                     "infraonAssistant.autoApprove": {
                         "type": "boolean",
                         "default": false,

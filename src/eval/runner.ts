@@ -22,6 +22,7 @@ import { createFsTools, runShell } from '../core/fstools';
 import { matchesGlob } from '../core/glob';
 import { LlmConfig, LlmFn } from '../core/llm';
 import { Effort } from '../core/policy';
+import { DiagnoseFirstSetting } from '../core/diagnosis';
 import { detectVerifyCommands } from '../core/verify';
 import { DEFAULT_TASK_TIMEOUT_S, EvalTask, solutionDir } from './tasks';
 
@@ -46,6 +47,8 @@ export interface EvalOptions {
   logDir?: string;
   /** Progress lines (default: none). */
   print?: (line: string) => void;
+  /** infraonAssistant.diagnoseFirst for this extension's agent (default: off, as before it existed). */
+  diagnoseFirst?: DiagnoseFirstSetting;
   /** Override the per-task time limit (tests use short ones). */
   timeoutSeconds?: number;
 }
@@ -231,6 +234,7 @@ async function runOne(task: EvalTask, run: number, kind: AgentKind, opts: EvalOp
     const agent = new Agent({
       root: work, llm: counted, getConfig: () => opts.llmConfig, tools: () => createFsTools(),
       checks: () => detectVerifyCommands(work),
+      diagnoseFirst: opts.diagnoseFirst ? () => opts.diagnoseFirst! : undefined,
     });
     const timer = setTimeout(() => { timedOut = true; note('time limit reached: cancelling the agent'); agent.cancel(); }, limitMs);
     try {

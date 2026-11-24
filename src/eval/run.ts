@@ -4,6 +4,7 @@
  *   npm run eval -- [--tasks <dir>] [--filter <regex>] [--model <id>] [--effort low|medium|high|max] [--repeat N] [--keep]
  *                   [--history | --history-file <file>]
  *                   [--agent infraon|cline|both] [--cline <path>] [--cline-thinking <level>] [--native-sampling]
+ *                   [--diagnose-first auto|off]   (the diagnose-first lock, diagnosis.ts; default off)
  *
  * Environment (never prompted for):
  *   INFRAON_EVAL_BASE_URL          the gateway, e.g. https://llm.internal/v1
@@ -35,7 +36,7 @@ import { findTasksDir, loadTasks, missingToolchains } from './tasks';
 
 interface Args {
   tasks?: string; filter?: string; model?: string; effort: Effort; repeat: number; keep: boolean; history?: string;
-  agents: AgentKind[]; cline?: string; clineThinking?: string; nativeSampling: boolean;
+  agents: AgentKind[]; cline?: string; clineThinking?: string; nativeSampling: boolean; diagnoseFirst?: 'auto' | 'off';
 }
 
 /** Marks "use the default history file" until the tasks folder is known. */
@@ -64,6 +65,7 @@ export function parseArgs(argv: string[]): Args | string {
         case '--cline': a.cline = val(); break;
         case '--cline-thinking': a.clineThinking = val(); break;
         case '--native-sampling': a.nativeSampling = true; break;
+        case '--diagnose-first': { const v = val(); if (v !== 'auto' && v !== 'off') { return `--diagnose-first must be auto or off (got ${v})`; } a.diagnoseFirst = v; break; }
         case '--help': case '-h': return 'help';
         default: return `unknown option ${k}`;
       }
@@ -73,7 +75,7 @@ export function parseArgs(argv: string[]): Args | string {
 }
 
 const USAGE = 'Usage: npm run eval -- [--tasks <dir>] [--filter <regex>] [--model <id>] [--effort low|medium|high|max] [--repeat N] [--keep] [--history | --history-file <file>]\n'
-  + '                    [--agent infraon|cline|both] [--cline <path to cline install>] [--cline-thinking none|low|medium|high|xhigh] [--native-sampling]';
+  + '                    [--agent infraon|cline|both] [--cline <path to cline install>] [--cline-thinking none|low|medium|high|xhigh] [--native-sampling] [--diagnose-first auto|off]';
 
 /** The extension version from the package.json above this file (out/eval or src/eval), or "unknown". */
 export function extensionVersion(start = __dirname): string {
@@ -138,12 +140,12 @@ async function main(): Promise<number> {
     ? { baseUrl: meter.url, apiKey: meter.agentKey, model, ...sampling, allowSelfSigned: false }
     : { baseUrl, apiKey, model, ...sampling, allowSelfSigned };
 
-  console.log(`Running ${tasks.length} task(s) × ${args.repeat} with ${model} (effort ${args.effort})${comparing ? ` for ${args.agents.join(' and ')}` : ''}\n`);
+  console.log(`Running ${tasks.length} task(s) × ${args.repeat} with ${model} (effort ${args.effort}${args.diagnoseFirst === 'auto' ? ', diagnose-first on' : ''})${comparing ? ` for ${args.agents.join(' and ')}` : ''}\n`);
   let report;
   try {
     report = await runEval({
       tasks, effort: args.effort, repeat: args.repeat, keep: args.keep, logDir, print: (l) => console.log(l),
-      llmConfig, agents: args.agents, meter, cline,
+      llmConfig, agents: args.agents, meter, cline, diagnoseFirst: args.diagnoseFirst,
     }, { llm: streamChat });
     if (meter) { report.forcedSampling = meter.forced(); }
   } finally { await meter?.close(); }
