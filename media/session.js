@@ -1350,13 +1350,26 @@
   }
   function onInputChange() {
     const v = input.value, caret = input.selectionStart;
-    const slash = /^\/([\w.:-]*)$/.exec(v);
+    // A "/" typed at the start or after a space, wherever the caret is, lists what can run there: commands and skills
+    // at the start of the message, skills only inside it (the host runs a /skill named anywhere; commands only lead).
+    // "src/foo" or "http://x" never open it: the slash must follow a space or the start.
+    const before = v.slice(0, caret);
+    const slash = input.selectionStart === input.selectionEnd ? /(^|\s)\/([\w.:-]*)$/.exec(before) : null;
     if (slash) {
-      const p = slash[1].toLowerCase();
-      const all = state.commands || [];
+      const start = before.length - slash[2].length - 1;
+      const leading = !v.slice(0, start).trim();
+      const p = slash[2].toLowerCase();
+      const all = (state.commands || []).filter((c) => leading || c.skill);
       const ranked = [...all.filter((c) => c.name.toLowerCase().startsWith(p)), ...all.filter((c) => !c.name.toLowerCase().startsWith(p) && c.name.toLowerCase().includes(p))];
       openPopup(ranked.map((c) => ({ id: c.name, label: `/${c.name}${c.args ? ' ' + c.args : ''}`, desc: `${c.skill ? `${skillSourceLabel(c.source)} skill · ` : ''}${c.description}` })),
-        (it) => { input.value = `/${it.id} `; hidePopup(); input.focus(); autosize(); });
+        (it) => {
+          const after = v.slice(caret);
+          const insert = `/${it.id}${/^\s/.test(after) ? '' : ' '}`;
+          input.value = `${v.slice(0, start)}${insert}${after}`;
+          const pos = start + insert.length + (/^\s/.test(after) ? 1 : 0);
+          input.setSelectionRange(pos, pos);
+          hidePopup(); input.focus(); autosize();
+        });
       return;
     }
     const m = /(^|\s)@([^\s@]*)$/.exec(v.slice(0, caret));

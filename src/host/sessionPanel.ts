@@ -11,7 +11,7 @@ import { clampMode } from '../core/centralPolicy';
 import { EFFORT_INFO, MODES, MODE_INFO, Mode, isEffort, isMode } from '../core/policy';
 import { UiEvent } from '../core/runtime';
 import { COMMANDS, SlashApi, parseSlash, runSlash } from '../core/slash';
-import { SKILL_TEMPLATE, expandSkill, findSkill, validateNewSkill } from '../core/skills';
+import { SKILL_TEMPLATE, expandSkill, findInlineSkills, findSkill, inlineSkillPrompt, validateNewSkill } from '../core/skills';
 import { watchBranch } from './branchWatcher';
 import { DIFF_SCHEME } from './diffProvider';
 import type { Hub } from './hub';
@@ -419,6 +419,12 @@ Look at the code first if that helps make the steps concrete. If anything import
       for (const abs of exp.read) { await target.reads.markRead(abs); }
     } catch { /* no such agent any more: it will simply read the files itself */ }
     let prompt = exp.text;
+    // A skill named inside the message ("please /code-review the auth module") runs as if typed at the start.
+    const inline = findInlineSkills(text, this.hub.skills.filter((s) => s.userInvocable));
+    if (inline.length) {
+      const env = (await Promise.all(inline.map((s) => this.hub.skillEnvironment(s).catch(() => '')))).join('');
+      prompt = `${inlineSkillPrompt(text, inline, exp.text.startsWith(text) ? exp.text.slice(text.length) : '')}${env}`;
+    }
     if (imgs.ok.length) {
       this.info(`Reading text from ${imgs.ok.length} screenshot${imgs.ok.length > 1 ? 's' : ''} (local OCR)…`);
       prompt += screenshotBlock(await this.ocrAll(imgs.ok));

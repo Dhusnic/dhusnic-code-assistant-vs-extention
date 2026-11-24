@@ -76,7 +76,8 @@ test('UI: Skills pill, manager (list / new form / create with AI), slash popup s
   assert.match(js, /function renderSkillForm/);
   assert.match(js, /function renderSkillAi/);
   assert.match(js, /skill · ` : ''\}\$\{c\.description\}/, 'slash popup labels skills');
-  assert.match(js, /const slash = \/\^\\\/\(\[\\w\.:-\]\*\)\$\/\.exec\(v\);/, 'popup accepts names with _ . :');
+  // A "/" starting a word anywhere opens it (inline_skills.test.ts runs it); names may contain _ . :
+  assert.match(js, /\/\(\^\|\\s\)\\\/\(\[\\w\.:-\]\*\)\$\/\.exec\(before\)/, 'popup accepts names with _ . :, at the start or after a space');
   const side = buildSidebarHtml({ nonce: 'n', cspSource: 'c', cssUri: 'a', jsUri: 'b', mdUri: 'd', logoSvg: '<svg></svg>' });
   for (const id of ['skillSec', 'skillList', 'skNewSide', 'skManageSide']) { assert.ok(side.includes(`id="${id}"`), id); }
 });

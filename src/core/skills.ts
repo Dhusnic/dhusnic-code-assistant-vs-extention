@@ -13,6 +13,7 @@ import { parseFrontmatter } from './frontmatter';
  * where <base> is <workspace>/.claude, <workspace>/.infraon, ~/.claude or ~/.infraon, a team library, or the extension's
  * own resources folder (built-in skills: lowest precedence, read-only; copy one to personal/project to change it).
  * `requires:` (Infraon extension to the format) lists what a skill needs on the machine, checked by skillDoctor.ts.
+ * A user runs a skill with `/name` at the start of a message, or anywhere inside it (findInlineSkills / inlineSkillPrompt).
  */
 export type SkillSource = 'project' | 'user' | 'builtin';
 
@@ -150,6 +151,37 @@ export function expandSkill(skill: Skill, args = ''): string {
   // Without this, models sometimes "fill in" a template inside the skill folder instead of producing the output.
   const readOnly = '\nThe skill folder is read-only reference: never edit or create files inside it unless the user explicitly asks to change the skill. Put results in your reply or in the project files the task is about.';
   return `<skill name="${skill.name}">\nBase directory: ${skill.dir} (relative paths in these instructions are relative to it)${files}${readOnly}\n\n${body}\n</skill>`;
+}
+
+/**
+ * `/name` tokens inside a message, at the start or after whitespace ("please /code-review the auth module"). Trailing
+ * punctuation is not part of the name ("run /simplify."). Only names of the given skills count, so a path such as
+ * /usr/bin stays text. Each skill once, in the order written.
+ */
+const SKILL_TOKEN = /(^|\s)\/([A-Za-z][\w:.-]*)/g;
+const tokenName = (raw: string): string => raw.replace(/[.:-]+$/, '');
+
+export function findInlineSkills(text: string, skills: Skill[]): Skill[] {
+  const found: Skill[] = [];
+  for (const m of text.matchAll(SKILL_TOKEN)) {
+    const s = findSkill(skills, tokenName(m[2]));
+    if (s && !found.includes(s)) { found.push(s); }
+  }
+  return found;
+}
+
+/**
+ * The prompt for a message that names skills inline: the request with the `/name` tokens taken out, then each skill's
+ * instructions with that request as its arguments (as if the user had typed `/name <request>`). `attached` (the
+ * @-mentioned files) goes once at the end, not into every skill's arguments.
+ */
+export function inlineSkillPrompt(text: string, found: Skill[], attached = ''): string {
+  const names = new Set(found.map((s) => s.name.toLowerCase()));
+  const request = text
+    .replace(SKILL_TOKEN, (all, lead: string, raw: string) => (names.has(tokenName(raw).toLowerCase()) ? `${lead}${raw.slice(tokenName(raw).length)}` : all))
+    .replace(/[ \t]{2,}/g, ' ').trim();
+  const list = found.map((s) => `/${s.name}`).join(', ');
+  return `The user ran the skill${found.length > 1 ? 's' : ''} ${list} inside their message. Their request: ${request || '(no further text)'}\n\nFollow the skill instructions below for this request now.\n\n${found.map((s) => expandSkill(s, request)).join('\n\n')}${attached.trim() ? `\n\n${attached.trim()}` : ''}`;
 }
 
 /** The `skill` tool, listing every model-invocable skill by name and description (full text loads on demand). */
