@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.33.0 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.34.0 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -21,6 +21,13 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.34.0: updates in the sidebar, with clear errors
+- New Updates section in the Infraon sidebar: your version, whether an update is available, when it
+  last checked, and buttons to Check now, Install and Reload.
+- When an update check fails, it says what went wrong in plain words (server not set up, server not
+  found, certificate not trusted, VPN or network down, damaged download, VS Code too old, ...) and
+  offers the fix: for example a button that opens the exact setting that is missing.
 
 New in 0.33.0: bug fixes start with the real cause
 - When you ask the agent to fix a bug ("fix the crash on save", a pasted error, "X is not working",
