@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.31.4 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.31.5 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -21,6 +21,14 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.31.5: long conversations stay on track
+- Compaction now counts the whole request (instructions and tools too), so it starts in time on
+  models with a small context window instead of failing with "context length exceeded".
+- One long request with many steps is compacted too: its earlier steps are summarized, while your
+  request and the latest steps are kept word for word.
+- Each new summary builds on the previous one in full, so goals and rules you gave early in a long
+  chat are not lost after several compactions. A summary that was cut off is never used.
 
 New in 0.31.4: skills are used automatically when they clearly fit
 - You do not have to name a skill. When your request clearly is the kind of work a skill covers
