@@ -18,6 +18,24 @@ npm run eval -- --repeat 3 --history
   count) to `eval/results/history.jsonl`, which git ignores. Compare the line for a release with the previous one.
 - Tasks whose toolchain is missing (`"requires": ["python"]` without Python 3 on PATH) are skipped and listed.
 
+## Comparing with Cline
+
+```
+npm install --prefix D:\tools\cline cline        # once; any folder works
+npm run eval -- --agent both --cline D:\tools\cline --repeat 3
+```
+
+- `--agent infraon|cline|both`: `both` runs every task with this extension's agent and then Cline, back to back, with
+  the same prompt, time limit, hidden tests and model. The report shows both side by side (pass rate, wall time, LLM
+  calls, model wait, time to first byte, tokens in/out, timeouts) and names the tasks where they differ.
+- Both agents reach the gateway through a local metering proxy, so calls and tokens are counted the same way for both.
+  It also writes this model's sampling profile into every request (Cline sends no temperature of its own);
+  `--native-sampling` lets each agent use its own sampling. `--cline-thinking <level>` passes Cline's `--thinking`.
+- Cline runs with isolated state in `eval-results/<stamp>-cline-home`, gets a placeholder key (the proxy adds the real
+  one), and its outbound proxy is set to a closed local port, so it cannot reach anything but the local proxy:
+  no Cline cloud, no telemetry, no update checks. The task code never leaves the machine except to the gateway.
+- `--history` records only this extension's runs.
+
 ## Task format
 
 ```

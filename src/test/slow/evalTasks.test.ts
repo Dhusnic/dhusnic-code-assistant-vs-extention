@@ -115,7 +115,7 @@ test('eval history: one JSON line per suite run, with per-task and per-difficult
 });
 
 test('eval CLI: --history and --history-file', () => {
-  assert.deepEqual(parseArgs(['--history', '--repeat', '3']), { effort: 'medium', repeat: 3, keep: false, history: DEFAULT_HISTORY });
-  assert.deepEqual(parseArgs(['--history-file', 'h.jsonl']), { effort: 'medium', repeat: 1, keep: false, history: 'h.jsonl' });
+  assert.deepEqual(parseArgs(['--history', '--repeat', '3']), { effort: 'medium', repeat: 3, keep: false, agents: ['infraon'], nativeSampling: false, history: DEFAULT_HISTORY });
+  assert.deepEqual(parseArgs(['--history-file', 'h.jsonl']), { effort: 'medium', repeat: 1, keep: false, agents: ['infraon'], nativeSampling: false, history: 'h.jsonl' });
   assert.match(String(parseArgs(['--history-file'])), /needs a value/);
 });

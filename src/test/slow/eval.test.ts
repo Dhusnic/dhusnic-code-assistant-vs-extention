@@ -174,9 +174,9 @@ test('eval runner: an LLM error is recorded, and the repo is still graded', asyn
 /* ------------------------------------------------------------------ CLI arguments */
 
 test('eval CLI: arguments', () => {
-  assert.deepEqual(parseArgs([]), { effort: 'medium', repeat: 1, keep: false });
+  assert.deepEqual(parseArgs([]), { effort: 'medium', repeat: 1, keep: false, agents: ['infraon'], nativeSampling: false });
   assert.deepEqual(parseArgs(['--filter', 'rename', '--effort', 'high', '--repeat', '3', '--keep', '--model', 'qwen']),
-    { effort: 'high', repeat: 3, keep: true, filter: 'rename', model: 'qwen' });
+    { effort: 'high', repeat: 3, keep: true, filter: 'rename', model: 'qwen', agents: ['infraon'], nativeSampling: false });
   assert.match(String(parseArgs(['--effort', 'huge'])), /--effort must be/);
   assert.match(String(parseArgs(['--repeat', '0'])), /--repeat must be/);
   assert.match(String(parseArgs(['--filter'])), /needs a value/);
