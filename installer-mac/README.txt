@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.32.0 - INSTALL OR UPDATE (macOS)
+INFRAON CODE ASSISTANT 0.33.0 - INSTALL OR UPDATE (macOS)
 
 First install
 1. Double-click the zip to extract it.
@@ -26,6 +26,16 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.33.0: bug fixes start with the real cause
+- When you ask the agent to fix a bug ("fix the crash on save", a pasted error, "X is not working",
+  /fix), it now has to find and prove the cause before it may change your code. It reads the code,
+  reproduces the bug with a failing test or a small script, and records the cause with file:line
+  evidence. The assistant checks that evidence, not just the agent's word for it.
+- If the agent is unsure, it asks you first. After the fix, the reproduction must pass before the
+  agent may say it is done.
+- Test files and repro scripts can be written at any time. Lint and formatting clean-ups are not
+  affected. Turn it off with the setting infraonAssistant.diagnoseFirst = off.
 
 New in 0.32.0: the agent manages files and folders, and takes screenshots
 - New file tools: create folders, move or rename, copy and delete files and folders, and look up

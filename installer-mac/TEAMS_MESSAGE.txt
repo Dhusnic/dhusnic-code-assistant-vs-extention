@@ -1,8 +1,9 @@
 Hi team 👋
 
-Infraon Code Assistant 0.32.0 is out: the agent now handles files, folders and screenshots 🗂️📸
+Infraon Code Assistant 0.33.0 is out: bug fixes now start with the real cause 🐞🔍
 
 🆕 What's new
+• Bug fixes start with the real cause: when you ask for a fix, the agent must first prove the root cause (code it read + a reproduction it ran) before it may change your code, and the reproduction must pass afterwards. No more patching the symptom. Turn off with infraonAssistant.diagnoseFirst = off
 • File and folder tools: the agent can create folders, move/rename, copy and delete files and folders (with approval, and undoable with rewind), and show a folder tree
 • Screenshots: the agent can capture your screen, the VS Code window, another app's window or part of the screen, and tell you what it sees
 • Long chats stay on track: compaction starts in time, long multi-step requests are compacted too, and rules you gave early on are no longer lost after several compactions
