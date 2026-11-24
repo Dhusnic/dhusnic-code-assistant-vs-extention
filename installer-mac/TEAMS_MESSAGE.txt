@@ -1,8 +1,9 @@
 Hi team 👋
 
-Infraon Code Assistant 0.31.2 is out: a clearer chat that's easier to navigate 💬
+Infraon Code Assistant 0.31.3 is out: a clearer chat that's easier to navigate 💬
 
 🆕 What's new
+• Type / anywhere in your message to pick a skill. A skill in the middle of a sentence runs too: "please /code-review the login changes"
 • Press ↑ in the message box to bring back a message you sent before (↓ goes forward). Edit it, then press Enter
 • New 🕒 clock button at the top of a session: lists every message you sent with its time. Click one and the chat jumps to it
 • File edits now show a ✎ pen instead of a ✓, so changes stand out from reads

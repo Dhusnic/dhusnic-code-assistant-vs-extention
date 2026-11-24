@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.31.2 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.31.3 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -21,6 +21,12 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.31.3: use a skill anywhere in your message
+- Type / anywhere in the message box (at the start or after a space) to pick a skill from the list.
+- A skill named in the middle of a sentence now runs too, for example:
+    please /code-review the login changes and then /simplify them
+  The rest of your message is what the skill works on.
 
 New in 0.31.2: find your messages faster, and no more endless repeats
 - Press the Up arrow in the message box to bring back a message you sent before (Down goes forward
