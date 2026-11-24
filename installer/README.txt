@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.31.3 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.31.4 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -21,6 +21,12 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.31.4: skills are used automatically when they clearly fit
+- You do not have to name a skill. When your request clearly is the kind of work a skill covers
+  (for example "write the release notes as a Word document"), the agent loads that skill by itself
+  and follows it. You see a "Using skill: ..." step in the chat when that happens.
+- It only does this for a clear match, not for requests that are merely related.
 
 New in 0.31.3: use a skill anywhere in your message
 - Type / anywhere in the message box (at the start or after a space) to pick a skill from the list.
