@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
-  SUMMARY_ACK, SUMMARY_SYSTEM, attachWorkingState, changedFilesFrom, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact, transcript,
-  workingState, workingStateFor,
+  EARLIER_SUMMARY_HEADING, SUMMARY_ACK, SUMMARY_SYSTEM, TURN_SUMMARY_TITLE, attachWorkingState, changedFilesFrom, cleanSummary, compactHistory, compactLatestTurn, estimateTokens,
+  WORKING_STATE_TITLE, pruneToolOutputs, shouldCompact, transcript, workingState, workingStateFor,
 } from '../core/compaction';
 import { SUMMARY_PREFIX, historyToUi } from '../core/sessions';
 import { Agent } from '../core/agent';
@@ -90,6 +90,11 @@ function agentWith(llm: ReturnType<typeof fakeLlm>, limit: number, ratio = 0.75)
   });
 }
 const OPTS = { mode: 'ask', effort: 'medium', model: 'm' } as const;
+/** The system prompt, memory and tool definitions of the agent's latest request, as the compaction threshold counts them. */
+const overheadOf = (agent: Agent): number => {
+  const o = agent.lastContext;
+  return o ? o.system + o.memory + o.tools + o.mcpTools + o.agentTools : 0;
+};
 const isSummarizerCall = (msgs: any[]) => msgs[0].role === 'system' && /summarize a conversation/i.test(msgs[0].content);
 
 test('agent: below the threshold nothing is compacted and usage is reported', async () => {
@@ -145,9 +150,10 @@ test('agent: old bulky tool output is trimmed before resorting to a summary', as
     call('read_file', { path: 'big.txt' }, 'r1'), call('list_dir', { path: '.' }, 'r2'), call('list_dir', { path: '.' }, 'r3'),
     call('list_dir', { path: '.' }, 'r4'), call('list_dir', { path: '.' }, 'r5'), text('done'),
   ]);
-  const agent = new Agent({
+  // 8000 tokens for the messages, on top of whatever the system prompt and tools measure.
+  const agent: Agent = new Agent({
     root, llm: llm.fn, getConfig: () => ({ baseUrl: '', apiKey: '', model: 'm', temperature: 0, allowSelfSigned: true }),
-    tools: () => createFsTools(), contextLimit: () => 8000, compactRatio: () => 0.5,
+    tools: () => createFsTools(), contextLimit: () => 8000 + 2 * overheadOf(agent), compactRatio: () => 0.5,
   });
   await agent.send('go', OPTS, recordingUi());
   assert.ok(!llm.calls.some(isSummarizerCall), 'no summarizer call needed');
@@ -329,4 +335,146 @@ test('agent: when summarizing fails, the working state is attached to the latest
   await agent.compact(OPTS, ui, true);
   assert.ok(ui.events.some((e) => e.includes('Could not summarize')));
   assert.match(agent.history.at(-1)!.content!, /^three\n\n<system-reminder>\n## Working state[^]*Latest user request \(verbatim\):\nthree\n<\/system-reminder>$/);
+});
+
+/* ------------------------------------------------------------------ one long turn, and the prompt/tool overhead */
+
+test('compactLatestTurn: summarizes the earlier steps of the turn, keeps the request and the latest steps verbatim', async () => {
+  const history: ChatMessage[] = [
+    u('old'), a('r0'),
+    { role: 'user', content: 'do the big job\n[expanded attachment]', display: 'do the big job' },
+    a(null, [tc('1')]), t('1', 'o1'), a(null, [tc('2'), tc('3')]), t('2', 'o2'), t('3', 'o3'), a(null, [tc('4')]), t('4', 'o4'), a(null, [tc('5')]), t('5', 'o5'),
+  ];
+  let seen = '';
+  const carry = { call: tc('carry', 'todo_write', '{"todos":[]}'), result: 'tasks' };
+  const r = await compactLatestTurn(history, [0, 2], async (x) => { seen = x; return 'STEPS SUMMARY'; }, 3, carry, (cut) => `${WORKING_STATE_TITLE}\ncut ${cut}`);
+  assert.equal(r.summarized, true);
+  assert.deepEqual(r.turnStarts, [0, 2]);
+  assert.match(seen, /^USER REQUEST: do the big job/);
+  assert.match(seen, /-> o1/); assert.match(seen, /-> o3/); assert.doesNotMatch(seen, /-> o4/);
+  const req = r.history[2];
+  assert.equal(req.display, 'do the big job', 'the UI still shows what the user typed');
+  assert.ok(req.content!.startsWith('do the big job\n[expanded attachment]\n\n<system-reminder>\n'));
+  assert.ok(req.content!.endsWith(`${TURN_SUMMARY_TITLE}\nSTEPS SUMMARY\n\n${WORKING_STATE_TITLE}\ncut 8\n</system-reminder>`), req.content!);
+  assert.deepEqual(r.history.slice(3).map((m) => m.tool_call_id ?? m.role), ['assistant', 'carry', 'assistant', '4', 'assistant', '5'], 'cut at a model step, carry after the request');
+  assert.deepEqual(r.history.slice(0, 2), history.slice(0, 2), 'earlier turns untouched');
+
+  // A second pass folds the first summary in instead of nesting it.
+  let again = '';
+  const r2 = await compactLatestTurn(r.history, r.turnStarts, async (x) => { again = x; return 'NEWER'; }, 2);
+  assert.match(again, /EARLIER STEPS \(already summarized\):\nSTEPS SUMMARY\nLATER STEPS:/);
+  assert.equal(r2.history[2].content!.split('<system-reminder>').length, 2, 'one reminder in the request');
+  assert.match(r2.history[2].content!, /\nNEWER\n<\/system-reminder>$/);
+});
+
+test('compactLatestTurn: nothing to do when the turn is short or the summary is empty', async () => {
+  assert.equal((await compactLatestTurn([u('q'), a(null, [tc('1')]), t('1', 'o')], [0], async () => 'S', 2)).summarized, false);
+  const h = [u('q'), a(null, [tc('1')]), t('1', 'o'), a(null, [tc('2')]), t('2', 'o'), a('done')];
+  assert.equal((await compactLatestTurn(h, [0], async () => '  ', 2)).summarized, false);
+  assert.equal((await compactLatestTurn(h, [0], async () => 'S', 2)).summarized, true);
+});
+
+test('changedFilesFrom: reads only the latest Working state block, which already includes the earlier ones', () => {
+  const block = (n: number) => workingState({ changed: [{ path: 'a.ts', added: n, removed: 0 }], checks: [] });
+  const history: ChatMessage[] = [
+    u(`${SUMMARY_PREFIX}\nS\n\n${block(2)}`), a(SUMMARY_ACK),
+    u(`req\n\n<system-reminder>\n${TURN_SUMMARY_TITLE}\nT\n\n${block(5)}\n</system-reminder>`),
+  ];
+  assert.deepEqual(changedFilesFrom(history, () => true), [{ path: 'a.ts', added: 5, removed: 0 }]);
+});
+
+test('agent: one long turn is compacted by summarizing its own earlier steps', async () => {
+  const root = await tmpDir();
+  const fs = await import('fs/promises'); const path = await import('path');
+  await fs.writeFile(path.join(root, 'f.txt'), 'some text\n'.repeat(120));
+  // The summarizer may be asked at any step: it answers whenever asked, and the agent reads the file 10 times.
+  let step = 0;
+  const reply = (m: any[]) => (isSummarizerCall(m) ? text('TURN SUMMARY') : step < 10 ? call('read_file', { path: 'f.txt' }, `r${step++}`) : text('done'));
+  const llm = fakeLlm(Array.from({ length: 20 }, () => reply));
+  // Room for about 2000 tokens of messages on top of the system prompt and tools.
+  const agent: Agent = new Agent({
+    root, llm: llm.fn, getConfig: () => ({ baseUrl: '', apiKey: '', model: 'm', temperature: 0, allowSelfSigned: true }),
+    tools: () => createFsTools(), contextLimit: () => Math.ceil((overheadOf(agent) + 2000) / 0.75), compactRatio: () => 0.75,
+  });
+  const ui = recordingUi();
+  await agent.send('read it many times', OPTS, ui);
+  assert.ok(llm.calls.some(isSummarizerCall), `the turn was summarized: ${ui.events.join(' | ')}`);
+  const req = agent.history.find((m) => m.role === 'user')!;
+  assert.equal(req.display ?? req.content, 'read it many times');
+  assert.match(req.content!, /TURN SUMMARY/);
+  assert.equal(agent.turnCount, 1);
+  const ids = new Set(agent.history.flatMap((m) => m.tool_calls?.map((c) => c.id) ?? []));
+  assert.ok(agent.history.filter((m) => m.role === 'tool').every((m) => ids.has(m.tool_call_id!)), 'every tool result follows its call');
+});
+
+test('agent: the compaction threshold counts the system prompt and tool definitions', async () => {
+  const llm = fakeLlm([text('A'), text('B'), (m) => (isSummarizerCall(m) ? text('S') : text('x'))]);
+  const agent = agentWith(llm, 100000);
+  const ui = recordingUi();
+  await agent.send('one', OPTS, ui); await agent.send('two', OPTS, ui);
+  agent.lastContext = { system: 1000, memory: 0, tools: 0, mcpTools: 0, agentTools: 0, toolCount: 0, mcpCount: 0 };
+  assert.equal(await agent.compact(OPTS, ui), false, 'small overhead: under the threshold');
+  agent.lastContext = { system: 70000, memory: 0, tools: 6000, mcpTools: 0, agentTools: 0, toolCount: 0, mcpCount: 0 };
+  await agent.compact(OPTS, ui);
+  assert.ok(llm.calls.some(isSummarizerCall), 'messages alone are tiny, but the whole request is over 75%');
+  assert.ok(agent.history[0].content!.startsWith(SUMMARY_PREFIX));
+});
+
+/* ------------------------------------------------------------------ repeated compaction keeps the earlier summary */
+
+test('transcript: an earlier summary goes first and whole, without its Working state, and is never dropped', () => {
+  const narrative = `GOAL: migrate auth. CONSTRAINT: do not touch the public API. ${'detail '.repeat(1200)}END-OF-SUMMARY`;
+  const summary = u(`${SUMMARY_PREFIX}\n${narrative}\n\n${workingState({ changed: [{ path: 'a.ts', added: 1, removed: 0 }], checks: [] })}`);
+  const later = Array.from({ length: 400 }, (_, i) => u(`later message ${i} `.repeat(20)));
+  const tr = transcript([summary, a(SUMMARY_ACK), ...later], 5000);
+  assert.ok(tr.startsWith(`${EARLIER_SUMMARY_HEADING}\nGOAL: migrate auth. CONSTRAINT: do not touch the public API.`));
+  assert.match(tr, /END-OF-SUMMARY\n\nCONVERSATION SINCE THAT SUMMARY:\n\.\.\.\[earlier part omitted\]/, 'whole, though over 4000 chars and the oldest part');
+  assert.doesNotMatch(tr, /## Working state/, 'the state block is rebuilt by code, not re-summarized');
+  assert.match(tr, /later message 399/);
+  assert.doesNotMatch(transcript([u('q'), a('r')]), /EARLIER SUMMARY/);
+});
+
+test('transcript: a request keeps the summary of its own earlier steps whole', () => {
+  const steps = `STEP-START ${'s'.repeat(5000)} STEP-END`;
+  const tr = transcript([u(`do it\n\n<system-reminder>\n${TURN_SUMMARY_TITLE}\n${steps}\n\n${WORKING_STATE_TITLE}\nx\n</system-reminder>`), a('ok')]);
+  assert.match(tr, /^USER: do it\nEARLIER STEPS OF THIS REQUEST \(summarized\): STEP-START s+ STEP-END\nASSISTANT: ok$/);
+});
+
+test('compactHistory: a second compaction hands the first summary to the summarizer in full', async () => {
+  const first = await compactHistory([u('t0 keep exports named'), a('r0'), u('t1'), a('r1')], [0, 2], async () => `FIRST ${'x'.repeat(6000)} TAIL`);
+  const history = [...first.history, a('r1b'), u('t2'), a('r2')];
+  let seen = '';
+  await compactHistory(history, [...first.turnStarts, history.length - 2], async (x) => { seen = x; return 'SECOND'; });
+  assert.match(seen, /^EARLIER SUMMARY[^\n]*\nFIRST x{6000} TAIL\n\nCONVERSATION SINCE THAT SUMMARY:\nUSER: t1\nASSISTANT: r1\nASSISTANT: r1b$/, 'the acknowledgement is left out');
+  assert.match(SUMMARY_SYSTEM, /carry its goals, constraints and decisions forward/);
+});
+
+test('cleanSummary: drops thinking blocks; an unclosed one leaves nothing', () => {
+  assert.equal(cleanSummary('<think>planning</think>\nThe summary.'), 'The summary.');
+  assert.equal(cleanSummary('<think>still thinking when the cap hit'), '');
+  assert.equal(cleanSummary('  plain  '), 'plain');
+});
+
+test('agent: a summary cut off by the token cap is retried with a larger cap, then refused', async () => {
+  const cut = (content: string) => ({ content, toolCalls: [], finishReason: 'length' });
+  const caps: number[] = [];
+  const run = async (answers: any[]) => {
+    let k = 0;
+    const llm = { fn: (async (cfg: any, m: any[]) => {
+      if (!isSummarizerCall(m)) { return text('ok'); }
+      caps.push(cfg.maxTokens);
+      return answers[k++];
+    }) as any };
+    const agent = agentWith(llm as any, 100000);
+    const ui = recordingUi();
+    await agent.send('one', OPTS, ui); await agent.send('two', OPTS, ui);
+    await agent.compact(OPTS, ui, true);
+    return { agent, ui };
+  };
+  const ok = await run([cut('half a summ'), text('<think>hmm</think>FULL SUMMARY')]);
+  assert.deepEqual(caps, [2048, 4096]);
+  assert.equal(ok.agent.history[0].content!.split('\n')[1], 'FULL SUMMARY');
+  const bad = await run([cut('half'), cut('still half')]);
+  assert.ok(!bad.agent.history[0].content!.startsWith(SUMMARY_PREFIX), 'a cut-off summary is not accepted');
+  assert.ok(bad.ui.events.some((e) => e.includes('Could not summarize the conversation (the summary was cut off)')));
 });

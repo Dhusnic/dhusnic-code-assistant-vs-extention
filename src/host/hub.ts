@@ -755,7 +755,7 @@ export class Hub {
     const running = this.manager.snapshot().flatMap((s) => s.agents).filter((a) => a.status === 'running' || a.status === 'waiting').length;
     return {
       endpoint: host, model: this.defaults().model, models: this.models, health: healthView(this.health, this.modelProbe, this.defaults().model, this.probeMinutes() > 0),
-      contextWindow: this.cfg.get<number>('contextWindow', 131072), running, queued: this.manager.snapshot().flatMap((s) => s.agents).filter((a) => a.status === 'queued').length,
+      contextWindow: this.contextWindow(), running, queued: this.manager.snapshot().flatMap((s) => s.agents).filter((a) => a.status === 'queued').length,
       maxConcurrent: this.cfg.get<number>('maxConcurrentAgents', 4), usage: this.usage.summary(),
       mcp: this.mcp.status().map((s) => ({ name: s.name, status: s.status, tools: s.tools })),
     };

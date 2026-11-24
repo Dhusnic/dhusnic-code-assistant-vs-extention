@@ -22,7 +22,7 @@ import { TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoRemi
 import { SKILL_TOOL, expandSkill, findSkill, skillLoaded, skillToolSpec } from './skills';
 import { Mode, effortParams, isAllowed, requiresApproval } from './policy';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
-import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, attachWorkingState, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact, workingStateFor } from './compaction';
+import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, attachWorkingState, cleanSummary, compactHistory, compactLatestTurn, estimateTokens, pruneToolOutputs, shouldCompact, workingStateFor } from './compaction';
 import * as path from 'path';
 import { FileReadTracker, resolveIn } from './fstools';
 import { LoopGuard, withNudge } from './loopGuard';
@@ -180,43 +180,81 @@ export class Agent {
     return { used: estimateTokens(this.history), limit: this.learnedLimit ? Math.min(configured, this.learnedLimit) : configured };
   }
 
+  /** Tokens of the system prompt, memory and tool definitions, as measured for the latest request (0 before one). */
+  private overheadTokens(): number {
+    const o = this.lastContext;
+    return o ? o.system + o.memory + o.tools + o.mcpTools + o.agentTools : 0;
+  }
+
   /**
    * Keeps the conversation inside the model's context window: first trims old tool output, then (if still
-   * too large, or when `force` is set) summarizes everything before the latest turn. Returns true if history changed.
+   * too large, or when `force` is set) summarizes everything before the latest turn, and when the latest turn alone is
+   * still too large (or is the only one), its earlier steps too. The threshold counts the whole request: messages plus
+   * the system prompt, memory and tool definitions. Returns true if history changed.
    */
   async compact(opts: RunOptions, ui: AgentUi, force = false): Promise<boolean> {
     const { used, limit } = this.contextUsage();
     const ratio = this.deps.compactRatio?.() ?? DEFAULT_RATIO;
-    if (!force && !shouldCompact(used, limit, ratio)) { ui.usage?.(used, limit); return false; }
+    const overhead = this.overheadTokens();
+    const over = (messages: number) => shouldCompact(messages + overhead, limit, ratio);
+    if (!force && !over(used)) { ui.usage?.(used, limit); return false; }
 
     const pruned = pruneToolOutputs(this.history, force ? 4 : 8);
-    if (!force && !shouldCompact(estimateTokens(pruned), limit, ratio)) {
+    if (!force && !over(estimateTokens(pruned))) {
       this.history = pruned;
       ui.usage?.(estimateTokens(pruned), limit);
       return true;
     }
     const signal = this.abort?.signal ?? new AbortController().signal;
+    const isEdit = (n: string) => this.toolFor(n)?.kind === 'edit';
+    const current = () => ({ changed: this.track.changed, todos: this.todoState().todos, checks: this.track.verified });
     // What was changed, planned and checked so far, appended after the summary so the model does not lose track of it.
-    const state = (forSummary: boolean) => workingStateFor(this.history, this.turnStarts, (n) => this.toolFor(n)?.kind === 'edit', { changed: this.track.changed, todos: this.todoState().todos, checks: this.track.verified }, forSummary);
-    try {
-      // The latest task list survives the summary, so reminders about unfinished steps keep working afterwards.
-      const { todos } = this.todoState();
-      const carry = todos && unfinishedTodos(todos).length
-        ? { call: { id: `todo_carry_${Date.now().toString(36)}`, type: 'function' as const, function: { name: TODO_TOOL, arguments: JSON.stringify({ todos }) } }, result: formatTodos(todos) }
-        : undefined;
-      const res = await compactHistory(pruned, this.turnStarts, async (text) => {
-        const cfg = { ...(await this.deps.getConfig(opts)), temperature: 0.1, maxTokens: 2048 };
-        const sent: ChatMessage[] = [{ role: 'system', content: SUMMARY_SYSTEM }, { role: 'user', content: text }];
+    const state = (forSummary: boolean) => workingStateFor(this.history, this.turnStarts, isEdit, current(), forSummary);
+    // The latest task list survives the summary, so reminders about unfinished steps keep working afterwards.
+    const { todos } = this.todoState();
+    const carryFor = (tag: string) => (todos && unfinishedTodos(todos).length
+      ? { call: { id: `todo_carry_${tag}${Date.now().toString(36)}`, type: 'function' as const, function: { name: TODO_TOOL, arguments: JSON.stringify({ todos }) } }, result: formatTodos(todos) }
+      : undefined);
+    // A summary cut off by the token cap (or one that is all thinking) would be taken as complete and silently lose
+    // the rest, so it is asked for once more with a larger cap, and refused (falling back to trimming) if still cut.
+    const summarize = async (text: string) => {
+      const sent: ChatMessage[] = [{ role: 'system', content: SUMMARY_SYSTEM }, { role: 'user', content: text }];
+      for (const maxTokens of [2048, 4096]) {
+        const cfg = { ...(await this.deps.getConfig(opts)), temperature: 0.1, maxTokens };
         const out = await this.deps.llm(cfg, sent, [], () => {}, signal);
         ui.spent?.(tokensSpent(out, sent));
-        return out.content;
-      }, carry, state(true));
-      this.history = res.summarized ? res.history : attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
-      if (res.summarized) { this.turnStarts = res.turnStarts; }
+        const summary = cleanSummary(out.content ?? '');
+        if (out.finishReason !== 'length' && summary) { return summary; }
+      }
+      throw new Error('the summary was cut off');
+    };
+    let history = pruned;
+    let turnStarts = this.turnStarts;
+    let summarized = false;
+    let failure: string | undefined;
+    try {
+      const res = await compactHistory(pruned, turnStarts, summarize, carryFor(''), state(true));
+      if (res.summarized) { ({ history, turnStarts } = res); summarized = true; }
+      // One long turn: summarizing earlier turns cannot help, so its own earlier steps are summarized as well.
+      if ((force && !summarized) || over(estimateTokens(history))) {
+        const h = history, ts = turnStarts;
+        const turn = await compactLatestTurn(h, ts, summarize, force ? 4 : 6, carryFor('turn_'), (cut) => workingStateFor(h, ts, isEdit, current(), cut));
+        if (turn.summarized) { history = turn.history; summarized = true; }
+      }
     } catch (e: any) {
       if (e.message === 'Cancelled') { throw e; }
+      failure = e.message;
+    }
+    if (summarized) {
+      this.history = history;
+      this.turnStarts = turnStarts;
+    } else {
       this.history = attachWorkingState(pruneToolOutputs(this.history, 2, 600), state(false));
-      ui.info(`Could not summarize the conversation (${e.message}); trimmed old tool output instead.`);
+    }
+    if (failure) {
+      ui.info(summarized
+        ? `Could not summarize the earlier steps of this turn (${failure}); kept the summary of earlier turns.`
+        : `Could not summarize the conversation (${failure}); trimmed old tool output instead.`);
     }
     const after = estimateTokens(this.history);
     ui.info(`Conversation compacted to save context (~${Math.round(used / 1000)}k → ~${Math.round(after / 1000)}k tokens).`);
@@ -353,10 +391,6 @@ export class Agent {
         this.injectQueued(ui);
         // The user may have switched modes during the last step: the next model call and its tools follow the new one.
         this.syncMode(run);
-        const forced = this.compactRequested;
-        this.compactRequested = false;
-        await this.compact(opts, ui, forced);
-        const cfg = { ...(await this.deps.getConfig(opts)), maxTokens: ep.maxTokens };
         const memory = (await this.deps.memory?.()) ?? '';
         const specs = this.specsFor(run.mode);
         // The skills section goes in only when the model can load skills (the skill tool is offered this round).
@@ -365,7 +399,12 @@ export class Agent {
           role: 'system',
           content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots, planFirstOn(), canLoadSkills),
         };
+        // Measured before compacting, so the threshold counts this request's system prompt and tools too.
         this.lastContext = measureContext(system.content ?? '', memory, specs);
+        const forced = this.compactRequested;
+        this.compactRequested = false;
+        await this.compact(opts, ui, forced);
+        const cfg = { ...(await this.deps.getConfig(opts)), maxTokens: ep.maxTokens };
         let res: StreamResult;
         try {
           ui.modelCall?.('waiting');
