@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Skill, findInlineSkills, inlineSkillPrompt } from '../core/skills';
+import { Agent, buildSystemPrompt } from '../core/agent';
+import { SKILLS_PROMPT, Skill, findInlineSkills, inlineSkillPrompt, skillLoaded } from '../core/skills';
+import { call, fakeLlm, recordingUi, text, tmpDir } from './helpers';
 
 /* A skill named anywhere in a message ("please /code-review the auth module") runs like one typed at the start, and the
  * composer's "/" popup opens wherever a "/" starts a word (the real onInputChange of media/session.js, run on fakes). */
@@ -87,4 +89,45 @@ test('slash popup: picking replaces only the token at the caret and keeps the re
   p.type('/|explain this');
   p.shown()!.pick({ id: 'compact' });
   assert.equal(p.input.value, '/compact explain this');
+});
+
+/* ---------- the agent loading skills by itself (no /name typed) ---------- */
+
+const OPTS = { mode: 'auto', effort: 'low', model: 'm' } as const;
+const agentWith = async (llm: ReturnType<typeof fakeLlm>, skills: Skill[]) => new Agent({
+  root: await tmpDir('skill-'), llm: llm.fn, getConfig: () => ({ baseUrl: '', apiKey: '', model: 'm', temperature: 0, allowSelfSigned: true }),
+  tools: () => [], skills: () => skills,
+});
+
+test('system prompt: the skills section (clear matches only) is there only when the model can load skills', () => {
+  assert.ok(buildSystemPrompt('auto', 'low', '/r', '', undefined, false, '', '', undefined, false, true).includes(SKILLS_PROMPT));
+  assert.ok(!buildSystemPrompt('auto', 'low', '/r', '').includes('# Skills'));
+  assert.match(SKILLS_PROMPT, /only for a clear match/);
+  assert.match(SKILLS_PROMPT, /If you are unsure, do not load one/);
+});
+
+test('Agent: with skills, every request carries the skills section; without, none', async () => {
+  const llm = fakeLlm([text('ok')]);
+  await (await agentWith(llm, SKILLS)).send('make me a word document', OPTS, recordingUi());
+  assert.match(llm.calls[0][0].content, /# Skills/);
+  const none = fakeLlm([text('ok')]);
+  await (await agentWith(none, [])).send('hi', OPTS, recordingUi());
+  assert.doesNotMatch(none.calls[0][0].content, /# Skills/);
+});
+
+test('Agent: a skill the model loads itself is loaded once; a second call points back to it', async () => {
+  const llm = fakeLlm([call('skill', { name: 'docx' }, 's1'), call('skill', { name: 'docx' }, 's2'), text('done')]);
+  const agent = await agentWith(llm, SKILLS);
+  await agent.send('write the release notes as a Word document', OPTS, recordingUi());
+  const results = agent.history.filter((m) => m.role === 'tool').map((m) => String(m.content));
+  assert.match(results[0], /^Skill "docx" loaded\.[\s\S]*<skill name="docx">/);
+  assert.equal(results[1], 'Skill "docx" is already loaded earlier in this conversation. Keep following those instructions.');
+});
+
+test('skillLoaded: a skill the user ran with /name counts as loaded', () => {
+  const user = { role: 'user', content: `The user ran the skill /docx. Follow its instructions now.\n\n<skill name="docx">\n...\n</skill>` };
+  assert.equal(skillLoaded([user], 'docx'), true);
+  assert.equal(skillLoaded([user], 'DOCX'), true);
+  assert.equal(skillLoaded([user], 'xlsx'), false);
+  assert.equal(skillLoaded([{ role: 'assistant', content: '<skill name="xlsx">' }], 'xlsx'), false, 'only what was handed to the model counts');
 });

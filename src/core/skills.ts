@@ -184,6 +184,19 @@ export function inlineSkillPrompt(text: string, found: Skill[], attached = ''): 
   return `The user ran the skill${found.length > 1 ? 's' : ''} ${list} inside their message. Their request: ${request || '(no further text)'}\n\nFollow the skill instructions below for this request now.\n\n${found.map((s) => expandSkill(s, request)).join('\n\n')}${attached.trim() ? `\n\n${attached.trim()}` : ''}`;
 }
 
+/**
+ * System-prompt section when the agent can load skills by itself. Models follow the system prompt more closely than a
+ * tool description, so the "clear match only" rule is stated here too (the tool description repeats it).
+ */
+export const SKILLS_PROMPT = `# Skills
+The skill tool lists skills: instructions the team prepared for specific kinds of work. Before you start a task, check that list. When the user's request clearly is the kind of work a skill describes (for example they ask for a Word document and a docx skill exists), load that skill first and follow its instructions over your defaults, even if the user did not name it. Load a skill only for a clear match: not for a passing mention, a loosely related topic, or a task the skill would cover only in part. If you are unsure, do not load one. Load each skill once per conversation; a skill the user started with /name is already loaded.`;
+
+/** Whether the skill's instructions are already in the conversation (loaded by the skill tool, or run by the user). */
+export function skillLoaded(history: Array<{ role: string; content: string | null }>, name: string): boolean {
+  const n = name.toLowerCase();
+  return history.some((m) => typeof m.content === 'string' && (m.role === 'tool' || m.role === 'user') && m.content.toLowerCase().includes(`<skill name="${n}">`));
+}
+
 /** The `skill` tool, listing every model-invocable skill by name and description (full text loads on demand). */
 export function skillToolSpec(skills: Skill[]): ToolSpec | undefined {
   const usable = skills.filter((s) => s.modelInvocable);
@@ -194,7 +207,7 @@ export function skillToolSpec(skills: Skill[]): ToolSpec | undefined {
     if (listing.length + line.length > MAX_TOOL_DESCRIPTION) { listing += '- (more skills exist; ask the user for /skills)\n'; break; }
     listing += line;
   }
-  return fnSpec(SKILL_TOOL, `Load a skill: a packaged set of instructions the team prepared for a specific kind of task. When the user's request matches a skill's description, call this FIRST and then follow the instructions it returns (they replace your default approach). Available skills:
+  return fnSpec(SKILL_TOOL, `Load a skill: instructions the team prepared for one kind of task. Call it before starting the work when the user's request clearly is that kind of task (the request itself is what the description covers, not merely a related topic), then follow the instructions it returns: they replace your default approach. Do not load a skill for a passing mention or a loosely related request; when unsure, do not load one. Load each skill once per conversation. Available skills:
 ${listing}`, {
     name: { type: 'string', enum: usable.map((s) => s.name), description: 'Exact skill name.' },
     args: { type: 'string', description: 'Optional arguments for the skill (e.g. an id or a file).' },

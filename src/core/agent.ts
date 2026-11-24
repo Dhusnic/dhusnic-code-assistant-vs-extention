@@ -19,7 +19,7 @@ import { ApprovalPreview, Tool } from './tool';
 import { BUILTIN_AGENT_TYPES, DEFAULT_AGENT_TYPE } from './agentTypes';
 import { Answers, formatAnswers, validateQuestions } from './questions';
 import { TODO_REMINDER_ROUNDS, TodoInput, formatTodos, todoEndReminder, todoReminder, unfinishedTodos, validateTodos } from './todos';
-import { SKILL_TOOL, expandSkill, findSkill, skillToolSpec } from './skills';
+import { SKILL_TOOL, expandSkill, findSkill, skillLoaded, skillToolSpec } from './skills';
 import { Mode, effortParams, isAllowed, requiresApproval } from './policy';
 import { MAX_PARALLEL_TOOLS, Serializer, isReadOnlyCommand, planBatches } from './scheduler';
 import { DEFAULT_CONTEXT, DEFAULT_RATIO, SUMMARY_SYSTEM, attachWorkingState, compactHistory, estimateTokens, pruneToolOutputs, shouldCompact, workingStateFor } from './compaction';
@@ -358,11 +358,13 @@ export class Agent {
         await this.compact(opts, ui, forced);
         const cfg = { ...(await this.deps.getConfig(opts)), maxTokens: ep.maxTokens };
         const memory = (await this.deps.memory?.()) ?? '';
+        const specs = this.specsFor(run.mode);
+        // The skills section goes in only when the model can load skills (the skill tool is offered this round).
+        const canLoadSkills = specs.some((sp) => sp.function.name === SKILL_TOOL);
         const system: ChatMessage = {
           role: 'system',
-          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots, planFirstOn()),
+          content: buildSystemPrompt(run.mode, run.effort, this.deps.root, memory, undefined, !!this.deps.subagent, this.deps.extraSystem ?? '', checksSection, roots, planFirstOn(), canLoadSkills),
         };
-        const specs = this.specsFor(run.mode);
         this.lastContext = measureContext(system.content ?? '', memory, specs);
         let res: StreamResult;
         try {
@@ -773,6 +775,8 @@ export class Agent {
     const s = findSkill(all, name);
     if (!s) { return finish(false, `ERROR: no skill named "${name}". Available: ${all.filter((x) => x.modelInvocable).map((x) => x.name).join(', ') || 'none'}.`); }
     if (!s.modelInvocable) { return finish(false, `ERROR: the skill "${s.name}" can only be started by the user (/${s.name}). Tell the user they can run it.`); }
+    // Loaded earlier (by this tool or a /name the user typed) and still in the history: point back instead of repeating it.
+    if (skillLoaded(this.history, s.name)) { return finish(true, `Skill "${s.name}" is already loaded earlier in this conversation. Keep following those instructions.`); }
     let env = '';
     // A failed requirements check must never block the skill: it only loses the hints.
     if (s.requires?.length && this.deps.skillEnvironment) { try { env = await this.deps.skillEnvironment(s); } catch { /* no hints */ } }
