@@ -15,6 +15,7 @@ import { ModelTask, RoutingConfig, routeModel } from '../core/modelRouting';
 import { parseTeamSources, syncTeamSkills } from '../core/teamSkills';
 import { SkillDoctor, environmentNote, formatDoctorReport, nodeDoctorDeps } from '../core/skillDoctor';
 import { createImageViewTool } from '../core/imageView';
+import { createScreenshotTool } from '../core/screenshot';
 import { ocrImage } from '../core/ocr';
 import { FsToolsOptions, createFsTools } from '../core/fstools';
 import { LlmConfig, LlmFn, listModels, streamChat, streamChatOnce } from '../core/llm';
@@ -383,7 +384,8 @@ export class Hub {
     vision: () => (this.web.visionModel() ? (dataUrl, q, signal) => this.web.describeImage(dataUrl, q, signal) : undefined),
     ocr: (buf, ext) => ocrImage(this.ctx.extensionUri.fsPath, buf, ext),
   });
-  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, this.imageView, ...this.repoMapTools(), ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
+  private readonly screenshot = createScreenshotTool({ view: (p, question, ctx) => this.imageView.run({ path: p, question }, ctx) });
+  private allTools(sid = '_shared', browserKey = sid) { return [...this.fsTools, this.imageView, this.screenshot, ...this.repoMapTools(), ...createVsCodeTools(), ...createNavTools(), ...(this.cfg.get<boolean>('visibleTerminal', true) ? this.terminal.tools() : []), ...this.remote.tools(), ...this.web.tools(sid), ...this.testing.tools(browserKey), ...this.mcp.tools()]; }
 
   checkpointsFor(sid: string, aid: string): CheckpointStore { return new CheckpointStore(path.join(this.ctx.globalStorageUri.fsPath, 'checkpoints', sid, aid)); }
 

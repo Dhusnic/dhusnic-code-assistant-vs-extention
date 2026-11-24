@@ -9,6 +9,7 @@ import { EnginePreference, FileIndex, SearchMode, SearchOptions, formatSearch, s
 import { CodeIndex, formatCodeHits } from './codeSearch';
 import { reportNewErrors, takeBaseline } from './editDiagnostics';
 import type { SemanticRanker } from './hybridSearch';
+import { createFileOpsTools } from './fileOps';
 
 export { SKIP_DIRS, globToRegex, matchesGlob };
 
@@ -331,6 +332,31 @@ export interface FsToolsOptions {
 const SEARCH_MODES: SearchMode[] = ['content', 'files', 'count'];
 const MAX_GLOB_RESULTS = 200;
 
+const MAX_TREE_ENTRIES = 500;
+
+/** An indented folder tree, folders first, capped at MAX_TREE_ENTRIES lines. */
+async function listTree(abs: string, depth: number, signal: AbortSignal): Promise<string> {
+  const lines: string[] = [];
+  let more = 0;
+  const walk = async (dir: string, level: number): Promise<void> => {
+    let ents;
+    try { ents = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    ents.sort((x, y) => Number(y.isDirectory()) - Number(x.isDirectory()) || x.name.localeCompare(y.name));
+    for (const e of ents) {
+      if (signal.aborted) { return; }
+      if (lines.length >= MAX_TREE_ENTRIES) { more++; continue; }
+      const pad = '  '.repeat(level);
+      if (!e.isDirectory()) { lines.push(`${pad}${e.name}`); continue; }
+      if (SKIP_DIRS.has(e.name)) { lines.push(`${pad}${e.name}/ (skipped)`); continue; }
+      lines.push(`${pad}${e.name}/`);
+      if (level + 1 < depth) { await walk(path.join(dir, e.name), level + 1); }
+    }
+  };
+  await walk(abs, 0);
+  if (!lines.length) { return '(empty)'; }
+  return more ? `${lines.join('\n')}\n[${more} more entries; list a sub-folder or lower depth]` : lines.join('\n');
+}
+
 export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
   const indexes = new Map<string, FileIndex>();
   const indexFor = (root: string): FileIndex => {
@@ -440,11 +466,17 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
     },
     {
       kind: 'read',
-      spec: fnSpec('list_dir', 'List entries of a directory (non-recursive).', { path: { type: 'string' } }, ['path']),
-      describe: (a) => `List ${a.path || '.'}`,
+      spec: fnSpec('list_dir', 'List a folder. depth 1 (default) lists its entries; depth 2-6 shows the folder tree, skipping node_modules, .git and build output.',
+        { path: { type: 'string' }, depth: { type: 'number', description: 'levels to show, 1-6 (default 1)' } }, ['path']),
+      describe: (a) => `List ${a.path || '.'}${a.depth > 1 ? ` (depth ${a.depth})` : ''}`,
       async run(a, ctx) {
-        const ents = await fs.readdir(resolveReadable(ctx, a.path), { withFileTypes: true });
-        return ents.map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n') || '(empty)';
+        const abs = resolveReadable(ctx, a.path);
+        const depth = Math.min(6, Math.max(1, Math.floor(Number(a.depth) || 1)));
+        if (depth === 1) {
+          const ents = await fs.readdir(abs, { withFileTypes: true });
+          return ents.map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n') || '(empty)';
+        }
+        return listTree(abs, depth, ctx.signal);
       },
     },
     {
@@ -510,6 +542,7 @@ export function createFsTools(opts: FsToolsOptions = {}): Tool[] {
         return formatCodeHits(hits, String(a.query ?? ''), idx.truncated, scope.prefix);
       },
     },
+    ...createFileOpsTools({ invalidate: (root) => indexFor(root).invalidate() }),
     {
       kind: 'exec',
       spec: fnSpec('run_command',

@@ -36,7 +36,7 @@ You can call several tools in ONE response. Independent calls run at the same ti
 - Search for several likely names at once with one regex alternation (e.g. "getUser|fetchUser|load_user") rather than many sequential searches.
 - When you do not know what the code is called, use search_code with a few words describing what it does (e.g. "expired session cleanup"); then grep the identifiers it finds.
 - Read only what you need: use read_file line ranges on large files around the matches grep found.
-- Prefer the dedicated tools (read_file, grep, glob_files, list_dir, edit_file) over shell equivalents (cat, grep, find, sed); they are faster, respect .gitignore and need no approval.
+- Prefer the dedicated tools (read_file, grep, glob_files, list_dir, edit_file) over shell equivalents (cat, grep, find, sed); they are faster, respect .gitignore and need no approval. Likewise use create_dir, move_path, copy_path and delete_path rather than mkdir, mv, cp or rm: they stay in the workspace and can be undone.
 - Large outputs are truncated: narrow with line ranges, globs or more specific patterns instead of repeating the same call.
 
 # Running commands

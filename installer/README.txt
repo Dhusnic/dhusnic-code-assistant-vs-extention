@@ -1,4 +1,4 @@
-INFRAON CODE ASSISTANT 0.31.5 - INSTALL OR UPDATE (Windows)
+INFRAON CODE ASSISTANT 0.32.0 - INSTALL OR UPDATE (Windows)
 
 First install
 1. Right-click the zip -> Extract All (do not run from inside the zip).
@@ -21,6 +21,16 @@ What the installer does
 - Installs or updates the Infraon Code Assistant extension.
 - First install only: checks your key against the Infraon LLM gateway, then stores it in VS Code's
   encrypted storage.
+
+New in 0.32.0: the agent manages files and folders, and takes screenshots
+- New file tools: create folders, move or rename, copy and delete files and folders, and look up
+  a file's size, line count and date. Every change asks for approval like an edit and can be
+  undone with the session's rewind. The workspace folder itself and .git are never touched.
+- "List folder" can now show the whole folder tree a few levels deep.
+- New screenshot tool: the whole screen, the window in front (VS Code), any window by its title
+  (even when other windows cover it), or part of the screen. It asks for approval first, and the
+  agent can describe what it sees (for example "is an error shown?"). The QA tester agent can use
+  it too.
 
 New in 0.31.5: long conversations stay on track
 - Compaction now counts the whole request (instructions and tools too), so it starts in time on

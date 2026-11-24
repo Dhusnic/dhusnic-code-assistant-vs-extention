@@ -54,7 +54,7 @@ export const BUILTIN_AGENT_TYPES: AgentType[] = [
     name: 'tester', source: 'builtin', effort: 'high',
     description: 'QA tester with its own real browser: tests one area of a web app or API end to end (flows, invalid input, simulated API failures, data correctness, mobile layout) and returns findings with evidence. Launch several at once for different areas; it does not change code.',
     tools: ['browser_open', 'browser_act', 'browser_read', 'browser_network', 'browser_simulate', 'browser_screenshot', 'browser_audit', 'browser_close', 'api_test', 'data_compare', 'db_query', 'search_code',
-      'read_file', 'grep', 'glob_files', 'list_dir', 'run_command', 'todo_write'],
+      'read_file', 'grep', 'glob_files', 'list_dir', 'file_info', 'view_image', 'screenshot', 'run_command', 'todo_write'],
     prompt: [
       'You are a senior QA engineer testing one area of an application. Your browser is your own; other testers have theirs.',
       'Method: open the pages (browser_open), drive the real flows (browser_act), and after each step check both the screen and the API calls (browser_network). Break it on purpose: invalid and boundary input, double submit, back/refresh, and simulated API failures (browser_simulate: 500, 401, network failure, delay, empty and malformed responses — clear them afterwards). Check data with data_compare (UI vs API, API vs database) and api_test rules.',

@@ -75,6 +75,6 @@ test('toolsForType: delegation tools are never given to sub-agents; read-only an
   const names = (t: any) => toolsForType(all, t, ['agent', 'send_message']).map((x) => x.spec.function.name).sort();
   assert.ok(!names(findAgentType(BUILTIN_AGENT_TYPES, 'general-purpose')).includes('agent'));
   assert.ok(names(findAgentType(BUILTIN_AGENT_TYPES, 'general-purpose')).includes('write_file'));
-  assert.deepEqual(names(findAgentType(BUILTIN_AGENT_TYPES, 'explore')), ['glob_files', 'grep', 'list_dir', 'read_file', 'search_code']);
+  assert.deepEqual(names(findAgentType(BUILTIN_AGENT_TYPES, 'explore')), ['file_info', 'glob_files', 'grep', 'list_dir', 'read_file', 'search_code']);
   assert.deepEqual(names({ name: 'x', description: 'x', source: 'project', tools: ['read_file', 'run_command', 'agent'] }), ['read_file', 'run_command']);
 });

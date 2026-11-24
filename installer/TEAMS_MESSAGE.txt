@@ -1,8 +1,10 @@
 Hi team 👋
 
-Infraon Code Assistant 0.31.5 is out: a clearer chat that's easier to navigate 💬
+Infraon Code Assistant 0.32.0 is out: the agent now handles files, folders and screenshots 🗂️📸
 
 🆕 What's new
+• File and folder tools: the agent can create folders, move/rename, copy and delete files and folders (with approval, and undoable with rewind), and show a folder tree
+• Screenshots: the agent can capture your screen, the VS Code window, another app's window or part of the screen, and tell you what it sees
 • Long chats stay on track: compaction starts in time, long multi-step requests are compacted too, and rules you gave early on are no longer lost after several compactions
 • Skills work by themselves: ask for e.g. "the release notes as a Word document" and the agent picks the right skill (only when it clearly fits)
 • Type / anywhere in your message to pick a skill. A skill in the middle of a sentence runs too: "please /code-review the login changes"
